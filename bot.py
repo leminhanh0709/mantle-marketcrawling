@@ -1,8 +1,8 @@
+# crypto news bot v1.1
 import os
 import feedparser
 import requests
 import anthropic
-from datetime import datetime
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -11,9 +11,16 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
-ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("Missing TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_CHAT_ID:
+    raise ValueError("Missing TELEGRAM_CHAT_ID")
+if not ANTHROPIC_API_KEY:
+    raise ValueError("Missing ANTHROPIC_API_KEY")
 
 RSS_FEEDS = [
     {"name": "CoinDesk",        "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
@@ -123,8 +130,15 @@ def run_digest():
         send_to_telegram(f"⚠️ Bot gặp lỗi khi tạo digest: {str(e)}")
 
 def main():
+    logger.info("🤖 Bot starting up...")
+    logger.info(f"TELEGRAM_BOT_TOKEN: {'set' if TELEGRAM_BOT_TOKEN else 'MISSING'}")
+    logger.info(f"TELEGRAM_CHAT_ID: {'set' if TELEGRAM_CHAT_ID else 'MISSING'}")
+    logger.info(f"ANTHROPIC_API_KEY: {'set' if ANTHROPIC_API_KEY else 'MISSING'}")
+
     if os.environ.get("RUN_ON_START", "false").lower() == "true":
+        logger.info("RUN_ON_START=true → running digest now...")
         run_digest()
+
     vn_tz = pytz.timezone("Asia/Ho_Chi_Minh")
     scheduler = BlockingScheduler(timezone=vn_tz)
     scheduler.add_job(run_digest, CronTrigger(day_of_week="mon,wed,fri", hour=8, minute=0, timezone=vn_tz))
