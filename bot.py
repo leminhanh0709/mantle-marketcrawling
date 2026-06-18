@@ -1,4 +1,4 @@
-# crypto news bot v1.2
+# crypto news bot v1.3
 import os
 import feedparser
 import requests
@@ -163,9 +163,9 @@ def main():
     scheduler = BlockingScheduler(timezone=vn_tz)
     scheduler.add_job(
         run_digest,
-        CronTrigger(day_of_week="mon,wed,fri", hour=8, minute=0, timezone=vn_tz),
+        CronTrigger(hour=8, minute=0, timezone=vn_tz),
     )
-    logger.info("⏰ Scheduler started — running Mon/Wed/Fri at 08:00 ICT")
+    logger.info("⏰ Scheduler started — running every day at 08:00 ICT")
     scheduler.start()
 
 
