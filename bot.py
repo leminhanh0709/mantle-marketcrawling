@@ -1,173 +1,213 @@
-# crypto news bot v1.3
 import os
-import feedparser
-import requests
-import anthropic
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
-import pytz
 import logging
+import feedparser
+import anthropic
+import requests
+import schedule
+import time
+from datetime import datetime, timezone, timedelta
+from urllib.parse import quote
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
-ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+# ── ENV ──────────────────────────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
+ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
+RUN_ON_START       = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
-if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("Missing TELEGRAM_BOT_TOKEN")
-if not TELEGRAM_CHAT_ID:
-    raise ValueError("Missing TELEGRAM_CHAT_ID")
-if not ANTHROPIC_API_KEY:
-    raise ValueError("Missing ANTHROPIC_API_KEY")
-
-RSS_FEEDS = [
-    {"name": "CoinDesk",        "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
-    {"name": "CoinTelegraph",   "url": "https://cointelegraph.com/rss"},
-    {"name": "The Block",       "url": "https://www.theblock.co/rss.xml"},
-    {"name": "Decrypt",         "url": "https://decrypt.co/feed"},
-    {"name": "Bitcoin Magazine","url": "https://bitcoinmagazine.com/.rss/full/"},
-    {"name": "DL News",         "url": "https://www.dlnews.com/arc/outboundfeeds/rss/"},
+# ── RSS FEEDS ─────────────────────────────────────────────────────────────────
+CRYPTO_FEEDS = [
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://cointelegraph.com/rss",
+    "https://www.theblock.co/rss.xml",
+    "https://decrypt.co/feed",
+    "https://bitcoinmagazine.com/.rss/full/",
+    "https://www.dlnews.com/arc/outboundfeeds/rss/",
 ]
 
-IMPORTANT_KEYWORDS = [
-    "blackrock", "fidelity", "grayscale", "microstrategy", "jpmorgan",
-    "goldman sachs", "morgan stanley", "etf", "sec", "cftc", "fed",
-    "federal reserve", "treasury", "rwa", "real world asset",
-    "tokenization", "defi", "layer 2", "l2", "bitcoin", "ethereum",
-    "solana", "stablecoin", "usdc", "usdt", "hack", "exploit",
-    "crash", "surge", "ath", "all-time high", "liquidation",
-    "bankruptcy", "partnership", "acquisition", "launch", "mainnet",
-    "upgrade", "halving", "regulation", "ban", "approval",
-    "listing", "delisting", "airdrop",
+# Google News RSS for competitor watch
+COMPETITOR_PROJECTS = [
+    "Solana", "Ondo Finance", "Plume", "Arbitrum", "Optimism",
+    "Plasma Finance", "BNB Chain", "Stellar", "Avalanche",
 ]
 
+def google_news_rss(query: str) -> str:
+    encoded = quote(f"{query} crypto")
+    return f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
 
-def fetch_news(max_per_feed=8):
+# ── FETCH ARTICLES ────────────────────────────────────────────────────────────
+def fetch_feed(url: str, max_items: int = 10) -> list[dict]:
+    try:
+        feed = feedparser.parse(url)
+        items = []
+        for entry in feed.entries[:max_items]:
+            items.append({
+                "title":   getattr(entry, "title", ""),
+                "summary": getattr(entry, "summary", "")[:300],
+                "link":    getattr(entry, "link", ""),
+            })
+        return items
+    except Exception as e:
+        logger.warning(f"Failed to fetch {url}: {e}")
+        return []
+
+def fetch_all_crypto_news() -> list[dict]:
     articles = []
-    for feed_info in RSS_FEEDS:
-        try:
-            feed = feedparser.parse(feed_info["url"])
-            for entry in feed.entries[:max_per_feed]:
-                title = entry.get("title", "")
-                summary = entry.get("summary", entry.get("description", ""))[:300]
-                link = entry.get("link", "")
-                combined = (title + " " + summary).lower()
-                if any(kw in combined for kw in IMPORTANT_KEYWORDS):
-                    articles.append({
-                        "source": feed_info["name"],
-                        "title": title,
-                        "summary": summary,
-                        "link": link,
-                    })
-        except Exception as e:
-            logger.warning(f"Failed to fetch {feed_info['name']}: {e}")
-    logger.info(f"Fetched {len(articles)} relevant articles")
+    for url in CRYPTO_FEEDS:
+        articles.extend(fetch_feed(url, max_items=8))
+    logger.info(f"Fetched {len(articles)} crypto articles")
     return articles
 
+def fetch_competitor_news() -> dict[str, list[dict]]:
+    result = {}
+    for project in COMPETITOR_PROJECTS:
+        url = google_news_rss(project)
+        items = fetch_feed(url, max_items=6)
+        if items:
+            result[project] = items
+    logger.info(f"Fetched competitor news for {len(result)} projects")
+    return result
 
-def summarize_with_claude(articles):
-    if not articles:
-        return "No important news today."
+# ── SUMMARISE WITH CLAUDE ─────────────────────────────────────────────────────
+SYSTEM_PROMPT = """You are a professional crypto analyst who writes concise, insight-driven daily digests.
+Rules:
+- NO price action: ignore crash/surge/ATH/liquidation/price prediction news entirely
+- Focus on: technology, partnerships, product launches, regulation, institutional adoption, RWA, DeFi, tokenization
+- Each section: max 2-3 bullet points
+- Each bullet: 1-2 sentences, action-oriented, no fluff
+- Write in English
+- Use the exact section format provided"""
+
+def build_crypto_prompt(articles: list[dict]) -> str:
+    headlines = "\n".join(
+        f"- {a['title']}: {a['summary'][:150]}" for a in articles[:60]
+    )
+    return f"""Here are today's crypto news headlines:
+
+{headlines}
+
+Write a digest with EXACTLY these sections (skip a section if no relevant news, never invent news):
+
+🔥 TOP NARRATIVES
+(2-3 bullets on major themes — tech, regulation, adoption)
+
+🏦 INSTITUTIONAL MOVES
+(2-3 bullets on institutional/enterprise/government crypto activity)
+
+⚡ BREAKING & MARKET EVENTS
+(2-3 bullets on significant protocol events, hacks, launches — NO price news)
+
+📈 MARKET & PRODUCT NARRATIVES
+(2-3 bullets on RWA, DeFi, tokenization narratives and product developments)
+
+📊 INDUSTRY REPORTS & EVENTS
+(2-3 bullets on research, conferences, policy, regulatory updates)
+
+💡 KEY TAKEAWAY
+(1 sentence: the single most important insight of the day)
+
+Important: SKIP any bullet that is about price movements, token crashes, surges, ATH, or liquidations."""
+
+def build_competitor_prompt(competitor_news: dict[str, list[dict]]) -> str:
+    lines = []
+    for project, items in competitor_news.items():
+        lines.append(f"\n### {project}")
+        for item in items:
+            lines.append(f"- {item['title']}: {item['summary'][:150]}")
+    
+    headlines = "\n".join(lines)
+    return f"""Here are Google News results for these crypto competitor projects:
+{headlines}
+
+Write a "🔍 COMPETITOR WATCH" section.
+Rules:
+- Only include news with real signal: partnership, product launch, RWA deal, protocol upgrade, institutional integration, major hire
+- Ignore: price news, speculation, opinion pieces, rehashed old news
+- Format: "[Project]: [what happened in 1 sentence]"
+- Max 4-5 bullets total across all projects
+- If no meaningful news for a project, skip it entirely
+- If overall nothing meaningful, write: "No significant competitor updates today."
+
+Output ONLY the section content, no header."""
+
+def call_claude(prompt: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    articles_text = "\n\n".join([
-        f"[{a['source']}] {a['title']}\n{a['summary']}\nLink: {a['link']}"
-        for a in articles[:30]
-    ])
-    prompt = f"""You are a professional crypto market analyst. Below are the latest crypto news articles.
-
-Summarize them into a concise, informative digest in English using this format:
-
-📰 *CRYPTO NEWS DIGEST*
-📅 [today's date]
-
-🔥 *TOP NARRATIVES*
-- [Narrative 1 - 1-2 lines] — [Source Name](link)
-- [Narrative 2 - 1-2 lines] — [Source Name](link)
-- [Narrative 3 - 1-2 lines] — [Source Name](link)
-
-🏦 *INSTITUTIONAL MOVES*
-- [Institution action - 1-2 lines] — [Source Name](link)
-- [Institution action - 1-2 lines] — [Source Name](link)
-
-⚡ *BREAKING & MARKET EVENTS*
-- [Event 1 - 1-2 lines] — [Source Name](link)
-- [Event 2 - 1-2 lines] — [Source Name](link)
-
-📊 *INDUSTRY REPORTS & EVENTS*
-- [Report/Event - 1-2 lines] — [Source Name](link)
-
-💡 *KEY TAKEAWAY*
-[1-2 sentences summarizing what the market is focused on today]
-
-Requirements:
-- Write in English, keep technical terms as-is
-- Max 3-4 bullet points per section
-- Every bullet point MUST include a source link in format: — [Source Name](url)
-- If a section has no relevant news, skip it entirely
-- Use Telegram Markdown format (*bold*, no **)
-- Be concise and direct
-
-News articles:
-{articles_text}
-"""
-    response = client.messages.create(
+    message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}]
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text
+    return message.content[0].text.strip()
 
+# ── BUILD FINAL MESSAGE ───────────────────────────────────────────────────────
+def build_digest() -> str:
+    logger.info("Fetching news…")
+    crypto_articles   = fetch_all_crypto_news()
+    competitor_news   = fetch_competitor_news()
 
-def send_to_telegram(message):
+    logger.info("Calling Claude for main digest…")
+    main_digest = call_claude(build_crypto_prompt(crypto_articles))
+
+    logger.info("Calling Claude for competitor watch…")
+    competitor_section = call_claude(build_competitor_prompt(competitor_news))
+
+    vn_time = datetime.now(timezone(timedelta(hours=7)))
+    date_str = vn_time.strftime("%A, %B %d %Y")
+
+    message = (
+        f"📰 *CRYPTO NEWS DIGEST*\n"
+        f"📅 {date_str}\n"
+        f"{'─' * 30}\n\n"
+        f"{main_digest}\n\n"
+        f"{'─' * 30}\n\n"
+        f"🔍 *COMPETITOR WATCH*\n"
+        f"{competitor_section}"
+    )
+    return message
+
+# ── TELEGRAM ──────────────────────────────────────────────────────────────────
+def send_telegram(text: str) -> bool:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True,
-    }
-    response = requests.post(url, json=payload, timeout=30)
-    if response.status_code == 200:
-        logger.info("✅ Message sent to Telegram successfully")
-    else:
-        logger.error(f"❌ Telegram error: {response.status_code} — {response.text}")
-        payload["parse_mode"] = ""
-        requests.post(url, json=payload, timeout=30)
+    # Telegram message limit is 4096 chars; split if needed
+    chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+    success = True
+    for chunk in chunks:
+        resp = requests.post(url, json={
+            "chat_id":    TELEGRAM_CHAT_ID,
+            "text":       chunk,
+            "parse_mode": "Markdown",
+        }, timeout=30)
+        if not resp.ok:
+            logger.error(f"Telegram error: {resp.text}")
+            success = False
+    return success
 
-
-def run_digest():
-    logger.info("🚀 Starting crypto news digest job...")
+# ── JOB ───────────────────────────────────────────────────────────────────────
+def run_job():
+    logger.info("Starting daily digest job…")
     try:
-        articles = fetch_news()
-        digest = summarize_with_claude(articles)
-        send_to_telegram(digest)
-        logger.info("✅ Digest job completed")
+        digest = build_digest()
+        ok = send_telegram(digest)
+        logger.info(f"Digest sent: {ok}")
     except Exception as e:
-        logger.error(f"❌ Digest job failed: {e}")
-        send_to_telegram(f"⚠️ Bot error: {str(e)}")
+        logger.error(f"Job failed: {e}", exc_info=True)
+        send_telegram(f"⚠️ Bot error: {e}")
 
-
-def main():
-    logger.info("🤖 Bot starting up...")
-    logger.info(f"TELEGRAM_BOT_TOKEN: {'set' if TELEGRAM_BOT_TOKEN else 'MISSING'}")
-    logger.info(f"TELEGRAM_CHAT_ID: {'set' if TELEGRAM_CHAT_ID else 'MISSING'}")
-    logger.info(f"ANTHROPIC_API_KEY: {'set' if ANTHROPIC_API_KEY else 'MISSING'}")
-
-    if os.environ.get("RUN_ON_START", "false").lower() == "true":
-        logger.info("RUN_ON_START=true → running digest now...")
-        run_digest()
-
-    vn_tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    scheduler = BlockingScheduler(timezone=vn_tz)
-    scheduler.add_job(
-        run_digest,
-        CronTrigger(hour=8, minute=0, timezone=vn_tz),
-    )
-    logger.info("⏰ Scheduler started — running every day at 08:00 ICT")
-    scheduler.start()
-
-
+# ── MAIN ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    main()
+    logger.info("Bot starting…")
+
+    if RUN_ON_START:
+        logger.info("RUN_ON_START=true → running immediately")
+        run_job()
+
+    # Schedule 8:00 AM Vietnam time (UTC+7)
+    schedule.every().day.at("01:00").do(run_job)  # 01:00 UTC = 08:00 VN
+    logger.info("Scheduled daily digest at 08:00 ICT (01:00 UTC)")
+
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
