@@ -6,7 +6,7 @@ import requests
 import schedule
 import time
 from datetime import datetime, timezone, timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, parse_qs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -35,6 +35,25 @@ CRYPTO_FEEDS = [
 
 NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins"
 
+# ── DECODE GOOGLE NEWS LINKS ──────────────────────────────────────────────────
+def decode_google_news_url(url: str) -> str:
+    """Follow Google News redirect to get the real article URL."""
+    if "news.google.com" not in url:
+        return url
+    try:
+        # Some Google News URLs have ?url= param
+        qs = parse_qs(urlparse(url).query)
+        if "url" in qs:
+            return qs["url"][0]
+        # Otherwise follow the redirect
+        resp = requests.get(url, allow_redirects=True, timeout=6,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        if "news.google.com" not in resp.url:
+            return resp.url
+    except Exception:
+        pass
+    return url
+
 # ── FETCH ─────────────────────────────────────────────────────────────────────
 def fetch_feed(url: str, max_items: int = 8) -> list[dict]:
     try:
@@ -52,7 +71,7 @@ def fetch_feed(url: str, max_items: int = 8) -> list[dict]:
                 continue
             items.append({
                 "title": getattr(entry, "title", "").strip(),
-                "link":  getattr(entry, "link", "").strip(),
+                "link":  decode_google_news_url(getattr(entry, "link", "").strip()),
             })
         return items
     except Exception as e:
