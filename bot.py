@@ -33,6 +33,12 @@ CRYPTO_FEEDS = [
     "https://www.dlnews.com/arc/outboundfeeds/rss/",
 ]
 
+CRYPTO_NARRATIVES = [
+    "RWA", "Infrastructure", "DeFi", "Institutional",
+    "Regulation", "Gaming/NFT", "AI & Crypto",
+    "Cross-chain", "Stablecoins", "Identity & Privacy",
+]
+
 # ── FETCH ─────────────────────────────────────────────────────────────────────
 def fetch_feed(url: str, max_items: int = 10) -> list[dict]:
     try:
@@ -40,10 +46,12 @@ def fetch_feed(url: str, max_items: int = 10) -> list[dict]:
         items = []
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         for entry in feed.entries[:max_items]:
-            # try to filter by published date if available
             published = None
             if hasattr(entry, "published_parsed") and entry.published_parsed:
-                published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+                try:
+                    published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+                except Exception:
+                    pass
             if published and published < cutoff:
                 continue
             items.append({
@@ -82,104 +90,94 @@ def call_claude(prompt: str, max_tokens: int = 1500) -> str:
         max_tokens=max_tokens,
         system=(
             "You are a concise crypto analyst. "
-            "Never write about price movements, token crashes, surges, ATH, or liquidations. "
-            "Focus on: technology, partnerships, product launches, regulation, institutional moves, RWA, DeFi, tokenization. "
-            "Be extremely brief — 1 sentence per bullet max. "
-            "Always include the source link for each item."
+            "Never mention price movements, crashes, surges, ATH, or liquidations. "
+            "Focus on: technology, partnerships, product launches, regulation, institutional moves, RWA, DeFi. "
+            "Be extremely brief. Output only what is asked, no preamble."
         ),
         messages=[{"role": "user", "content": prompt}],
     )
     return msg.content[0].text.strip()
 
 # ── PROMPTS ───────────────────────────────────────────────────────────────────
-CRYPTO_NARRATIVES = [
-    "RWA (Real World Assets)",
-    "Infrastructure & Scaling",
-    "DeFi & Liquidity",
-    "Institutional Adoption",
-    "Regulation & Policy",
-    "Gaming & NFT",
-    "AI & Crypto",
-    "Cross-chain & Interoperability",
-    "Stablecoins",
-    "Identity & Privacy",
-]
-
 def build_competitor_prompt(competitor_news: dict[str, list[dict]]) -> str:
     lines = []
     for project, items in competitor_news.items():
         lines.append(f"\n### {project}")
         for item in items:
             lines.append(f"- {item['title']} | {item['link']}")
-    
+
     narratives_list = ", ".join(CRYPTO_NARRATIVES)
-    
-    return f"""Here are recent news items for each competitor project:
+
+    return f"""Recent news for each competitor:
 {"".join(lines)}
 
-For each project, pick the SINGLE most newsworthy item from the last 24 hours.
-Only include items about: partnerships, product launches, protocol upgrades, institutional deals, RWA, regulatory moves.
-Skip: price news, speculation, opinion pieces, generic market commentary.
+For each project, pick the SINGLE most newsworthy item from the last 24h.
+Only include: partnerships, launches, upgrades, institutional deals, RWA, regulation.
+Skip: price news, token speculation, generic market commentary.
 
-Format each line exactly like this (no bullet, no extra text):
-[Project] | [Narrative Category] | [One sentence summary] | [link]
+Output one line per project, exactly this format:
+PROJECT | NARRATIVE | Short title (max 10 words) | link
 
-Narrative categories to choose from: {narratives_list}
-
-If a project has no meaningful news, skip it entirely.
+Narrative must be one of: {narratives_list}
+Skip any project with no meaningful news.
 Output ONLY the lines, nothing else."""
 
 def build_institutional_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"- {a['title']} | {a['link']}" for a in articles[:60])
-    return f"""News headlines:
+    return f"""Headlines:
 {lines}
 
-Pick the 3 most significant institutional moves (banks, funds, governments, enterprises adopting or investing in crypto/blockchain).
-No price news. No speculation.
+Pick the 3 most significant institutional moves (banks, funds, governments, enterprises in crypto/blockchain).
+No price news.
 
-Format each as:
-• [One sentence] — [link]
+Format:
+• Short title (max 10 words) — link
 
-Output ONLY the 3 bullets, nothing else."""
+Output ONLY 3 bullets."""
 
 def build_breaking_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"- {a['title']} | {a['link']}" for a in articles[:60])
-    return f"""News headlines:
+    return f"""Headlines:
 {lines}
 
-Pick the 3 most impactful market-moving events or breaking stories (hacks, major protocol events, regulatory bombshells, industry drama with wide impact).
-No price news. No token crashes/surges.
+Pick the 3 biggest breaking events (hacks, major protocol events, regulatory bombshells, industry-wide impact).
+No price news, no token crashes/surges.
 
-Format each as:
-• [One sentence] — [link]
+Format:
+• Short title (max 10 words) — link
 
-Output ONLY the 3 bullets, nothing else."""
+Output ONLY 3 bullets."""
+
+# ── FORMAT COMPETITOR BLOCK ───────────────────────────────────────────────────
+def format_competitor_block(raw: str) -> str:
+    lines = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) == 4:
+            project, narrative, title, link = parts
+            lines.append(f"• *{project}* — `{narrative}`\n  {title}\n  {link}")
+        elif len(parts) == 3:
+            project, narrative, title = parts
+            lines.append(f"• *{project}* — `{narrative}`\n  {title}")
+    return "\n\n".join(lines) if lines else "No significant competitor updates today."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
 def build_digest() -> str:
     logger.info("Fetching news…")
-    crypto_articles  = fetch_crypto_news()
-    competitor_news  = fetch_competitor_news()
+    crypto_articles = fetch_crypto_news()
+    competitor_news = fetch_competitor_news()
 
     logger.info("Generating sections…")
-    raw_competitors  = call_claude(build_competitor_prompt(competitor_news))
-    institutional    = call_claude(build_institutional_prompt(crypto_articles))
-    breaking         = call_claude(build_breaking_prompt(crypto_articles))
+    raw_competitors = call_claude(build_competitor_prompt(competitor_news))
+    institutional   = call_claude(build_institutional_prompt(crypto_articles))
+    breaking        = call_claude(build_breaking_prompt(crypto_articles))
 
-    # Format competitor section
-    competitor_lines = []
-    for line in raw_competitors.strip().split("\n"):
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) == 4:
-            project, narrative, summary, link = parts
-            competitor_lines.append(f"• *{project}* `{narrative}`\n  {summary}\n  {link}")
-        elif len(parts) == 3:
-            project, narrative, summary = parts
-            competitor_lines.append(f"• *{project}* `{narrative}`\n  {summary}")
+    competitor_block = format_competitor_block(raw_competitors)
 
-    competitor_block = "\n\n".join(competitor_lines) if competitor_lines else "No significant competitor updates today."
-
-    vn_time = datetime.now(timezone(timedelta(hours=7)))
+    vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
 
     message = (
