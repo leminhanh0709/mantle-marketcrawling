@@ -162,7 +162,7 @@ No price news.
 {lines}
 
 Format (Markdown hyperlink):
-- [Short title max 10 words](link)
+• [Short title max 10 words](link)
 
 3 bullets only."""
 
@@ -174,11 +174,11 @@ No price/token crash news.
 {lines}
 
 Format (Markdown hyperlink):
-- [Short title max 10 words](link)
+• [Short title max 10 words](link)
 
 3 bullets only."""
 
-# ── FORMAT ────────────────────────────────────────────────────────────────────
+# ── FORMAT & PARSE ────────────────────────────────────────────────────────────
 def format_competitor_block(raw: str) -> str:
     lines = []
     for line in raw.strip().split("\n"):
@@ -192,18 +192,21 @@ def format_competitor_block(raw: str) -> str:
         elif len(parts) == 3:
             project, narrative, title = parts
             lines.append(f"• *{project}* `{narrative}` — {title}")
-    return "\n".join(lines) if lines else "No significant competitor updates today."
+    return "\n".join(lines) if lines else "No significant updates today."
 
 def parse_bullets(raw: str) -> list[dict]:
     items = []
     for line in raw.strip().split("\n"):
-        line = line.strip().lstrip("•").strip()
+        line = line.strip().lstrip("•-*[").strip()
         if not line:
             continue
-        if line.startswith("[") and "](" in line:
+        if line.startswith("[") and "](" in line and line.endswith(")"):
             title = line[1:line.index("](")]
-            link  = line[line.index("](")+2:line.rindex(")")]
+            link  = line[line.index("](")+2:-1]
             items.append({"title": title, "link": link})
+        elif " — " in line:
+            parts = line.split(" — ", 1)
+            items.append({"title": parts[0].strip(), "link": parts[1].strip()})
         else:
             items.append({"title": line, "link": ""})
     return items
@@ -248,7 +251,7 @@ def build_digest() -> tuple[str, dict]:
     telegram_text = (
         f"📰 *CRYPTO NEWS DIGEST* — {date_str}\n"
         f"{'─' * 28}\n\n"
-        f"🔍 *NARRATIVES FROM COMPETITORS*\n\n"
+        f"🔍 *NARRATIVES BY CHAINS*\n\n"
         f"{competitor_block}\n\n"
         f"{'─' * 28}\n\n"
         f"🏦 *INSTITUTIONAL MOVES*\n\n"
@@ -287,15 +290,14 @@ def send_telegram(text: str) -> bool:
 def build_lark_card(digest_sections: dict) -> dict:
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
-
     elements = []
 
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🔍 **NARRATIVES FROM COMPETITORS**"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🔍 **NARRATIVES BY CHAINS**"}})
     elements.append({"tag": "hr"})
     for item in digest_sections.get("competitors", []):
         elements.append({
             "tag": "div",
-            "text": {"tag": "lark_md", "content": f"**{item['project']}** · `{item['narrative']}`\n[{item['title']}]({item['link']})"}
+            "text": {"tag": "lark_md", "content": f"**{item['project']}** - {item['narrative']}\n[{item['title']}]({item['link']})"}
         })
 
     elements.append({"tag": "hr"})
