@@ -1,3 +1,6 @@
+Đây, copy từ đây:
+
+```python
 import os
 import logging
 import feedparser
@@ -16,6 +19,7 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
 X_BEARER_TOKEN     = os.environ["X_BEARER_TOKEN"]
+LARK_WEBHOOK_URL   = os.environ.get("LARK_WEBHOOK_URL", "")
 RUN_ON_START       = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
 # ── COMPETITORS (X username → display name) ───────────────────────────────────
@@ -56,7 +60,6 @@ def get_x_user_id(username: str) -> str | None:
     return None
 
 def fetch_x_tweets(username: str, user_id: str, max_results: int = 10) -> list[dict]:
-    """Fetch recent tweets from a user, last 24h only."""
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
     url = f"https://api.twitter.com/2/users/{user_id}/tweets"
     params = {
@@ -70,7 +73,6 @@ def fetch_x_tweets(username: str, user_id: str, max_results: int = 10) -> list[d
     if not resp.ok:
         logger.warning(f"X tweets failed for {username}: {resp.text[:100]}")
         return []
-
     data = resp.json().get("data", [])
     tweets = []
     for tweet in data:
@@ -89,7 +91,7 @@ def fetch_all_competitor_tweets() -> dict[str, list[dict]]:
         tweets = fetch_x_tweets(username, user_id, max_results=10)
         if tweets:
             result[display_name] = tweets
-        time.sleep(0.5)  # rate limit buffer
+        time.sleep(0.5)
     logger.info(f"Fetched X tweets for {len(result)} competitors")
     return result
 
@@ -142,7 +144,6 @@ def build_competitor_prompt(competitor_tweets: dict[str, list[dict]]) -> str:
         lines.append(f"\n### {project}")
         for t in tweets:
             lines.append(f"- {t['text']} | {t['link']}")
-
     return f"""These are recent tweets from competitor crypto projects:
 {"".join(lines)}
 
@@ -244,16 +245,37 @@ def send_telegram(text: str) -> bool:
             ok = False
     return ok
 
+# ── LARK ──────────────────────────────────────────────────────────────────────
+def send_lark(text: str) -> bool:
+    if not LARK_WEBHOOK_URL:
+        logger.info("Lark webhook not configured, skipping")
+        return False
+    resp = requests.post(LARK_WEBHOOK_URL, json={
+        "msg_type": "text",
+        "content":  {"text": text},
+    }, timeout=30)
+    if not resp.ok:
+        logger.error(f"Lark error: {resp.text}")
+        return False
+    result = resp.json()
+    if result.get("code", 0) != 0:
+        logger.error(f"Lark API error: {result}")
+        return False
+    logger.info("Lark message sent")
+    return True
+
 # ── JOB ───────────────────────────────────────────────────────────────────────
 def run_job():
     logger.info("Running digest…")
     try:
         digest = build_digest()
-        sent = send_telegram(digest)
-        logger.info(f"Sent: {sent}")
+        send_telegram(digest)
+        send_lark(digest)
+        logger.info("Digest sent to all channels")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram(f"⚠️ Bot error: {e}")
+        send_lark(f"⚠️ Bot error: {e}")
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
@@ -267,3 +289,4 @@ if __name__ == "__main__":
     while True:
         schedule.run_pending()
         time.sleep(30)
+```
