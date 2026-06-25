@@ -1,6 +1,3 @@
-Đây, copy từ đây:
-
-```python
 import os
 import logging
 import feedparser
