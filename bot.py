@@ -162,7 +162,7 @@ No price news.
 {lines}
 
 Format (Markdown hyperlink):
-• [Short title max 10 words](link)
+- [Short title max 10 words](link)
 
 3 bullets only."""
 
@@ -174,7 +174,7 @@ No price/token crash news.
 {lines}
 
 Format (Markdown hyperlink):
-• [Short title max 10 words](link)
+- [Short title max 10 words](link)
 
 3 bullets only."""
 
@@ -294,29 +294,32 @@ def build_lark_card(digest_sections: dict) -> dict:
 
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🔍 **NARRATIVES BY CHAINS**"}})
     elements.append({"tag": "hr"})
-    for item in digest_sections.get("competitors", []):
-        elements.append({
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": f"**{item['project']}** - {item['narrative']}\n[{item['title']}]({item['link']})"}
-        })
+    competitor_content = "\n".join(
+        f"**{item['project']}** - {item['narrative']}\n[{item['title']}]({item['link']})"
+        for item in digest_sections.get("competitors", [])
+    )
+    if competitor_content:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": competitor_content}})
 
     elements.append({"tag": "hr"})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🏦 **INSTITUTIONAL MOVES**"}})
     elements.append({"tag": "hr"})
-    for item in digest_sections.get("institutional", []):
-        elements.append({
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": f"[{item['title']}]({item['link']})"}
-        })
+    institutional_content = "\n".join(
+        f"[{item['title']}]({item['link']})"
+        for item in digest_sections.get("institutional", [])
+    )
+    if institutional_content:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": institutional_content}})
 
     elements.append({"tag": "hr"})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "⚡ **BREAKING & MARKET EVENTS**"}})
     elements.append({"tag": "hr"})
-    for item in digest_sections.get("breaking", []):
-        elements.append({
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": f"[{item['title']}]({item['link']})"}
-        })
+    breaking_content = "\n".join(
+        f"[{item['title']}]({item['link']})"
+        for item in digest_sections.get("breaking", [])
+    )
+    if breaking_content:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": breaking_content}})
 
     return {
         "msg_type": "interactive",
