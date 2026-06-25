@@ -15,13 +15,22 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
+X_BEARER_TOKEN     = os.environ["X_BEARER_TOKEN"]
 RUN_ON_START       = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
-# ── COMPETITORS ───────────────────────────────────────────────────────────────
-COMPETITOR_PROJECTS = [
-    "Solana", "Ondo Finance", "Plume", "Arbitrum", "Optimism",
-    "Plasma Finance", "BNB Chain", "Stellar", "Avalanche",
-]
+# ── COMPETITORS (X username → display name) ───────────────────────────────────
+COMPETITORS = {
+    "plumenetwork": "Plume",
+    "arbitrum":     "Arbitrum",
+    "Optimism":     "Optimism",
+    "Plasma":       "Plasma",
+    "BNBCHAIN":     "BNB Chain",
+    "StellarOrg":   "Stellar",
+    "avax":         "Avalanche",
+    "CantonNetwork":"Canton Network",
+    "solana":       "Solana",
+    "OndoFinance":  "Ondo Finance",
+}
 
 # ── CRYPTO RSS FEEDS ──────────────────────────────────────────────────────────
 CRYPTO_FEEDS = [
@@ -33,28 +42,58 @@ CRYPTO_FEEDS = [
     "https://www.dlnews.com/arc/outboundfeeds/rss/",
 ]
 
-NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins"
+NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins, Tokenization"
 
-# ── DECODE GOOGLE NEWS LINKS ──────────────────────────────────────────────────
-def decode_google_news_url(url: str) -> str:
-    """Follow Google News redirect to get the real article URL."""
-    if "news.google.com" not in url:
-        return url
-    try:
-        # Some Google News URLs have ?url= param
-        qs = parse_qs(urlparse(url).query)
-        if "url" in qs:
-            return qs["url"][0]
-        # Otherwise follow the redirect
-        resp = requests.get(url, allow_redirects=True, timeout=6,
-                            headers={"User-Agent": "Mozilla/5.0"})
-        if "news.google.com" not in resp.url:
-            return resp.url
-    except Exception:
-        pass
-    return url
+# ── X API ─────────────────────────────────────────────────────────────────────
+X_HEADERS = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
 
-# ── FETCH ─────────────────────────────────────────────────────────────────────
+def get_x_user_id(username: str) -> str | None:
+    url = f"https://api.twitter.com/2/users/by/username/{username}"
+    resp = requests.get(url, headers=X_HEADERS, timeout=10)
+    if resp.ok:
+        return resp.json().get("data", {}).get("id")
+    logger.warning(f"X user not found: {username} — {resp.text[:100]}")
+    return None
+
+def fetch_x_tweets(username: str, user_id: str, max_results: int = 10) -> list[dict]:
+    """Fetch recent tweets from a user, last 24h only."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = f"https://api.twitter.com/2/users/{user_id}/tweets"
+    params = {
+        "max_results":  max_results,
+        "start_time":   since,
+        "tweet.fields": "created_at,text,entities",
+        "expansions":   "attachments.media_keys",
+        "exclude":      "retweets,replies",
+    }
+    resp = requests.get(url, headers=X_HEADERS, params=params, timeout=10)
+    if not resp.ok:
+        logger.warning(f"X tweets failed for {username}: {resp.text[:100]}")
+        return []
+
+    data = resp.json().get("data", [])
+    tweets = []
+    for tweet in data:
+        tweet_id = tweet["id"]
+        text = tweet["text"].strip()
+        link = f"https://x.com/{username}/status/{tweet_id}"
+        tweets.append({"text": text[:280], "link": link})
+    return tweets
+
+def fetch_all_competitor_tweets() -> dict[str, list[dict]]:
+    result = {}
+    for username, display_name in COMPETITORS.items():
+        user_id = get_x_user_id(username)
+        if not user_id:
+            continue
+        tweets = fetch_x_tweets(username, user_id, max_results=10)
+        if tweets:
+            result[display_name] = tweets
+        time.sleep(0.5)  # rate limit buffer
+    logger.info(f"Fetched X tweets for {len(result)} competitors")
+    return result
+
+# ── RSS FETCH ─────────────────────────────────────────────────────────────────
 def fetch_feed(url: str, max_items: int = 8) -> list[dict]:
     try:
         feed = feedparser.parse(url)
@@ -71,7 +110,7 @@ def fetch_feed(url: str, max_items: int = 8) -> list[dict]:
                 continue
             items.append({
                 "title": getattr(entry, "title", "").strip(),
-                "link":  decode_google_news_url(getattr(entry, "link", "").strip()),
+                "link":  getattr(entry, "link", "").strip(),
             })
         return items
     except Exception as e:
@@ -83,18 +122,7 @@ def fetch_crypto_news() -> list[dict]:
     for url in CRYPTO_FEEDS:
         articles.extend(fetch_feed(url, max_items=5))
     logger.info(f"Fetched {len(articles)} crypto articles")
-    return articles[:30]  # hard cap 30
-
-def fetch_competitor_news() -> dict[str, list[dict]]:
-    result = {}
-    for project in COMPETITOR_PROJECTS:
-        encoded = quote(f"{project} crypto")
-        url = f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
-        items = fetch_feed(url, max_items=5)
-        if items:
-            result[project] = items[:3]  # max 3 per project
-    logger.info(f"Fetched competitors: {len(result)} projects")
-    return result
+    return articles[:30]
 
 # ── CLAUDE ────────────────────────────────────────────────────────────────────
 def call_claude(prompt: str, max_tokens: int = 600) -> str:
@@ -108,45 +136,51 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
     return msg.content[0].text.strip()
 
 # ── PROMPTS ───────────────────────────────────────────────────────────────────
-def build_competitor_prompt(competitor_news: dict[str, list[dict]]) -> str:
+def build_competitor_prompt(competitor_tweets: dict[str, list[dict]]) -> str:
     lines = []
-    for project, items in competitor_news.items():
-        for item in items:
-            lines.append(f"{project}: {item['title']} | {item['link']}")
-    headlines = "\n".join(lines)
-    return f"""Pick 1 best non-price news per project from last 24h (partnerships, launches, upgrades, RWA, regulation only).
+    for project, tweets in competitor_tweets.items():
+        lines.append(f"\n### {project}")
+        for t in tweets:
+            lines.append(f"- {t['text']} | {t['link']}")
 
-{headlines}
+    return f"""These are recent tweets from competitor crypto projects:
+{"".join(lines)}
 
-Output one line per project:
-PROJECT | NARRATIVE | 8-word title max | link
+For each project, pick the SINGLE most valuable tweet from last 24h.
+Only include: RWA updates, trend/narrative setting, market reports, product launches, protocol upgrades, partnerships, ecosystem news.
+Skip: price talk, memes, generic hype, event promos, retweets.
+
+Output one line per project exactly:
+PROJECT | NARRATIVE | Short summary (max 10 words) | link
 
 Narratives: {NARRATIVES}
-Skip projects with no relevant news. Output lines only."""
+Skip projects with nothing valuable. Output lines only."""
 
 def build_institutional_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{a['title']} | {a['link']}" for a in articles)
-    return f"""Pick 3 institutional crypto moves (banks, funds, governments, enterprises). No price news.
+    return f"""Pick 3 most significant institutional moves related to RWA, tokenization, or crypto adoption (banks, funds, governments, enterprises).
+No price news.
 
 {lines}
 
-Format (Markdown hyperlink, keep title under 8 words):
-• [Short title](link)
+Format (Markdown hyperlink):
+• [Short title max 10 words](link)
 
 3 bullets only."""
 
 def build_breaking_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{a['title']} | {a['link']}" for a in articles)
-    return f"""Pick 3 biggest breaking crypto events (hacks, protocol events, regulation, industry impact). No price news.
+    return f"""Pick 3 biggest breaking crypto events with wide market impact (hacks, regulation, major protocol events, industry shifts).
+No price/token crash news.
 
 {lines}
 
-Format (Markdown hyperlink, keep title under 8 words):
-• [Short title](link)
+Format (Markdown hyperlink):
+• [Short title max 10 words](link)
 
 3 bullets only."""
 
-# ── FORMAT ────────────────────────────────────────────────────────────────────
+# ── FORMAT COMPETITOR BLOCK ───────────────────────────────────────────────────
 def format_competitor_block(raw: str) -> str:
     lines = []
     for line in raw.strip().split("\n"):
@@ -160,16 +194,18 @@ def format_competitor_block(raw: str) -> str:
         elif len(parts) == 3:
             project, narrative, title = parts
             lines.append(f"• *{project}* `{narrative}` — {title}")
-    return "\n\n".join(lines) if lines else "No significant updates today."
+    return "\n".join(lines) if lines else "No significant competitor updates today."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
 def build_digest() -> str:
-    logger.info("Fetching…")
-    crypto_articles = fetch_crypto_news()
-    competitor_news = fetch_competitor_news()
+    logger.info("Fetching X tweets…")
+    competitor_tweets = fetch_all_competitor_tweets()
 
-    logger.info("Calling Claude (3 calls)…")
-    raw_competitors = call_claude(build_competitor_prompt(competitor_news), max_tokens=800)
+    logger.info("Fetching RSS news…")
+    crypto_articles = fetch_crypto_news()
+
+    logger.info("Calling Claude…")
+    raw_competitors = call_claude(build_competitor_prompt(competitor_tweets), max_tokens=800)
     institutional   = call_claude(build_institutional_prompt(crypto_articles), max_tokens=400)
     breaking        = call_claude(build_breaking_prompt(crypto_articles), max_tokens=400)
 
