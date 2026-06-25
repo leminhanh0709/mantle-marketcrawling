@@ -19,7 +19,7 @@ X_BEARER_TOKEN     = os.environ["X_BEARER_TOKEN"]
 LARK_WEBHOOK_URL   = os.environ.get("LARK_WEBHOOK_URL", "")
 RUN_ON_START       = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
-# ── COMPETITORS (X username → display name) ───────────────────────────────────
+# ── COMPETITORS ───────────────────────────────────────────────────────────────
 COMPETITORS = {
     "plumenetwork": "Plume",
     "arbitrum":     "Arbitrum",
@@ -162,7 +162,7 @@ No price news.
 {lines}
 
 Format (Markdown hyperlink):
-• [Short title max 10 words](link)
+- [Short title max 10 words](link)
 
 3 bullets only."""
 
@@ -174,11 +174,11 @@ No price/token crash news.
 {lines}
 
 Format (Markdown hyperlink):
-• [Short title max 10 words](link)
+- [Short title max 10 words](link)
 
 3 bullets only."""
 
-# ── FORMAT COMPETITOR BLOCK ───────────────────────────────────────────────────
+# ── FORMAT ────────────────────────────────────────────────────────────────────
 def format_competitor_block(raw: str) -> str:
     lines = []
     for line in raw.strip().split("\n"):
@@ -194,8 +194,38 @@ def format_competitor_block(raw: str) -> str:
             lines.append(f"• *{project}* `{narrative}` — {title}")
     return "\n".join(lines) if lines else "No significant competitor updates today."
 
+def parse_bullets(raw: str) -> list[dict]:
+    items = []
+    for line in raw.strip().split("\n"):
+        line = line.strip().lstrip("•").strip()
+        if not line:
+            continue
+        if line.startswith("[") and "](" in line:
+            title = line[1:line.index("](")]
+            link  = line[line.index("](")+2:line.rindex(")")]
+            items.append({"title": title, "link": link})
+        else:
+            items.append({"title": line, "link": ""})
+    return items
+
+def parse_competitor_lines(raw: str) -> list[dict]:
+    items = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) == 4:
+            items.append({
+                "project":   parts[0],
+                "narrative": parts[1],
+                "title":     parts[2],
+                "link":      parts[3],
+            })
+    return items
+
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
-def build_digest() -> str:
+def build_digest() -> tuple[str, dict]:
     logger.info("Fetching X tweets…")
     competitor_tweets = fetch_all_competitor_tweets()
 
@@ -203,27 +233,38 @@ def build_digest() -> str:
     crypto_articles = fetch_crypto_news()
 
     logger.info("Calling Claude…")
-    raw_competitors = call_claude(build_competitor_prompt(competitor_tweets), max_tokens=800)
-    institutional   = call_claude(build_institutional_prompt(crypto_articles), max_tokens=400)
-    breaking        = call_claude(build_breaking_prompt(crypto_articles), max_tokens=400)
+    raw_competitors   = call_claude(build_competitor_prompt(competitor_tweets), max_tokens=800)
+    raw_institutional = call_claude(build_institutional_prompt(crypto_articles), max_tokens=400)
+    raw_breaking      = call_claude(build_breaking_prompt(crypto_articles), max_tokens=400)
 
-    competitor_block = format_competitor_block(raw_competitors)
+    competitor_items    = parse_competitor_lines(raw_competitors)
+    institutional_items = parse_bullets(raw_institutional)
+    breaking_items      = parse_bullets(raw_breaking)
+    competitor_block    = format_competitor_block(raw_competitors)
 
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
 
-    return (
+    telegram_text = (
         f"📰 *CRYPTO NEWS DIGEST* — {date_str}\n"
         f"{'─' * 28}\n\n"
         f"🔍 *NARRATIVES FROM COMPETITORS*\n\n"
         f"{competitor_block}\n\n"
         f"{'─' * 28}\n\n"
         f"🏦 *INSTITUTIONAL MOVES*\n\n"
-        f"{institutional}\n\n"
+        f"{raw_institutional}\n\n"
         f"{'─' * 28}\n\n"
         f"⚡ *BREAKING & MARKET EVENTS*\n\n"
-        f"{breaking}"
+        f"{raw_breaking}"
     )
+
+    sections = {
+        "competitors":   competitor_items,
+        "institutional": institutional_items,
+        "breaking":      breaking_items,
+    }
+
+    return telegram_text, sections
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
 def send_telegram(text: str) -> bool:
@@ -243,14 +284,54 @@ def send_telegram(text: str) -> bool:
     return ok
 
 # ── LARK ──────────────────────────────────────────────────────────────────────
-def send_lark(text: str) -> bool:
+def build_lark_card(digest_sections: dict) -> dict:
+    vn_time  = datetime.now(timezone(timedelta(hours=7)))
+    date_str = vn_time.strftime("%d/%m/%Y")
+
+    elements = []
+
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🔍 **NARRATIVES FROM COMPETITORS**"}})
+    elements.append({"tag": "hr"})
+    for item in digest_sections.get("competitors", []):
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**{item['project']}** · `{item['narrative']}`\n[{item['title']}]({item['link']})"}
+        })
+
+    elements.append({"tag": "hr"})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🏦 **INSTITUTIONAL MOVES**"}})
+    elements.append({"tag": "hr"})
+    for item in digest_sections.get("institutional", []):
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"[{item['title']}]({item['link']})"}
+        })
+
+    elements.append({"tag": "hr"})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "⚡ **BREAKING & MARKET EVENTS**"}})
+    elements.append({"tag": "hr"})
+    for item in digest_sections.get("breaking", []):
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"[{item['title']}]({item['link']})"}
+        })
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "header": {
+                "title": {"tag": "plain_text", "content": f"📰 CRYPTO NEWS DIGEST — {date_str}"},
+                "template": "blue"
+            },
+            "elements": elements
+        }
+    }
+
+def send_lark(card: dict) -> bool:
     if not LARK_WEBHOOK_URL:
         logger.info("Lark webhook not configured, skipping")
         return False
-    resp = requests.post(LARK_WEBHOOK_URL, json={
-        "msg_type": "text",
-        "content":  {"text": text},
-    }, timeout=30)
+    resp = requests.post(LARK_WEBHOOK_URL, json=card, timeout=30)
     if not resp.ok:
         logger.error(f"Lark error: {resp.text}")
         return False
@@ -258,21 +339,22 @@ def send_lark(text: str) -> bool:
     if result.get("code", 0) != 0:
         logger.error(f"Lark API error: {result}")
         return False
-    logger.info("Lark message sent")
+    logger.info("Lark card sent")
     return True
 
 # ── JOB ───────────────────────────────────────────────────────────────────────
 def run_job():
     logger.info("Running digest…")
     try:
-        digest = build_digest()
-        send_telegram(digest)
-        send_lark(digest)
+        telegram_text, sections = build_digest()
+        send_telegram(telegram_text)
+        lark_card = build_lark_card(sections)
+        send_lark(lark_card)
         logger.info("Digest sent to all channels")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram(f"⚠️ Bot error: {e}")
-        send_lark(f"⚠️ Bot error: {e}")
+        send_lark({"msg_type": "text", "content": {"text": f"⚠️ Bot error: {e}"}})
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
