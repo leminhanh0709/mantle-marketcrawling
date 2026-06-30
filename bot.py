@@ -100,9 +100,12 @@ def build_top_posts(competitor_tweets: dict[str, list[dict]], top_n: int = 2) ->
     for project, tweets in competitor_tweets.items():
         sorted_tweets = sorted(tweets, key=lambda t: t.get("impressions", 0), reverse=True)
         for t in sorted_tweets[:top_n]:
+            title = t["text"].split("\n")[0].strip()  # first line only, avoid mid-sentence cuts
+            if len(title) > 70:
+                title = title[:70].rsplit(" ", 1)[0] + "…"
             result.append({
                 "project":     project,
-                "title":       t["text"][:80],
+                "title":       title,
                 "link":        t["link"],
                 "impressions": t.get("impressions", 0),
             })
@@ -269,10 +272,17 @@ def build_digest() -> tuple[str, dict]:
     competitor_block    = format_competitor_block(raw_competitors)
     top_posts           = build_top_posts(competitor_tweets, top_n=2)
 
-    top_posts_block = "\n".join(
-        f"• [{p['title']}]({p['link']}) — {format_impressions(p['impressions'])} views"
-        for p in top_posts
-    ) if top_posts else "No data available today."
+    # Group top posts by project for readability
+    top_posts_by_project = {}
+    for p in top_posts:
+        top_posts_by_project.setdefault(p["project"], []).append(p)
+
+    top_posts_lines = []
+    for project, posts in top_posts_by_project.items():
+        top_posts_lines.append(f"*{project}*")
+        for p in posts:
+            top_posts_lines.append(f"  • [{p['title']}]({p['link']}) — {format_impressions(p['impressions'])} views")
+    top_posts_block = "\n".join(top_posts_lines) if top_posts_lines else "No data available today."
 
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
@@ -337,10 +347,16 @@ def build_lark_card(digest_sections: dict) -> dict:
     elements.append({"tag": "hr"})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🏆 **TOP PERFORMING POSTS**"}})
     elements.append({"tag": "hr"})
-    top_posts_content = "\n".join(
-        f"[{p['title']}]({p['link']}) — {format_impressions(p['impressions'])} views"
-        for p in digest_sections.get("top_posts", [])
-    )
+    top_posts = digest_sections.get("top_posts", [])
+    top_posts_by_project = {}
+    for p in top_posts:
+        top_posts_by_project.setdefault(p["project"], []).append(p)
+    top_posts_lines = []
+    for project, posts in top_posts_by_project.items():
+        top_posts_lines.append(f"**{project}**")
+        for p in posts:
+            top_posts_lines.append(f"[{p['title']}]({p['link']}) — {format_impressions(p['impressions'])} views")
+    top_posts_content = "\n".join(top_posts_lines)
     if top_posts_content:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": top_posts_content}})
 
