@@ -301,7 +301,7 @@ def build_digest() -> tuple[list[str], dict]:
     institutional_items = parse_bullets(raw_institutional)
     breaking_items      = parse_bullets(raw_breaking)
     competitor_block    = format_competitor_block(raw_competitors)
-    top_posts           = build_top_posts(competitor_tweets, top_n=1)
+    top_posts           = build_top_posts(competitor_tweets, top_n=2)
     top_posts           = summarize_top_posts(top_posts)
 
     top_posts_by_project = {}
