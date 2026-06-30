@@ -111,6 +111,37 @@ def build_top_posts(competitor_tweets: dict[str, list[dict]], top_n: int = 2) ->
             })
     return result
 
+def build_top_posts_prompt(top_posts: list[dict]) -> str:
+    lines = "\n".join(f"{i}: [{p['project']}] {p['title']}" for i, p in enumerate(top_posts))
+    return f"""Summarize each tweet below into ONE short, clear sentence (max 12 words) explaining what it announces or means. If a tweet is vague, cryptic, or meaningless (like teasers, emojis, "shhhh"), infer the likely meaning briefly or write "Teaser post — no clear details yet."
+
+{lines}
+
+Output EXACTLY one line per index, in this format:
+INDEX: summary sentence
+
+Output lines only, no extra text."""
+
+def summarize_top_posts(top_posts: list[dict]) -> list[dict]:
+    if not top_posts:
+        return []
+    prompt = build_top_posts_prompt(top_posts)
+    raw = call_claude(prompt, max_tokens=600)
+    summary_map = {}
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        idx_str, summary = line.split(":", 1)
+        try:
+            idx = int(idx_str.strip())
+            summary_map[idx] = summary.strip()
+        except ValueError:
+            continue
+    for i, p in enumerate(top_posts):
+        p["summary"] = summary_map.get(i, p["title"])
+    return top_posts
+
 def format_impressions(n: int) -> str:
     if n >= 1_000_000:
         return f"{n/1_000_000:.1f}M"
@@ -270,7 +301,8 @@ def build_digest() -> tuple[str, dict]:
     institutional_items = parse_bullets(raw_institutional)
     breaking_items      = parse_bullets(raw_breaking)
     competitor_block    = format_competitor_block(raw_competitors)
-    top_posts           = build_top_posts(competitor_tweets, top_n=2)
+    top_posts           = build_top_posts(competitor_tweets, top_n=1)
+    top_posts           = summarize_top_posts(top_posts)
 
     top_posts_by_project = {}
     for p in top_posts:
@@ -280,7 +312,7 @@ def build_digest() -> tuple[str, dict]:
     for project, posts in top_posts_by_project.items():
         top_posts_lines.append(f"*{project}*")
         for p in posts:
-            top_posts_lines.append(f"  • [{p['title']}]({p['link']}) — {format_impressions(p['impressions'])} views")
+            top_posts_lines.append(f"  • [{p.get('summary', p['title'])}]({p['link']}) — {format_impressions(p['impressions'])} views")
     top_posts_block = "\n".join(top_posts_lines) if top_posts_lines else "No data available today."
 
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
@@ -377,7 +409,7 @@ def build_lark_card(digest_sections: dict) -> dict:
     for project, posts in top_posts_by_project.items():
         top_posts_lines.append(f"**{project}**")
         for p in posts:
-            top_posts_lines.append(f"[{p['title']}]({p['link']}) — {format_impressions(p['impressions'])} views")
+            top_posts_lines.append(f"[{p.get('summary', p['title'])}]({p['link']}) — {format_impressions(p['impressions'])} views")
     top_posts_content = "\n".join(top_posts_lines)
     if top_posts_content:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": top_posts_content}})
