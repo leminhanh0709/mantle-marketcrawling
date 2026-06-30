@@ -62,7 +62,7 @@ def fetch_x_tweets(username: str, user_id: str, max_results: int = 10) -> list[d
     params = {
         "max_results":  max_results,
         "start_time":   since,
-        "tweet.fields": "created_at,text,entities",
+        "tweet.fields": "created_at,text,entities,public_metrics",
         "expansions":   "attachments.media_keys",
         "exclude":      "retweets,replies",
     }
@@ -76,7 +76,9 @@ def fetch_x_tweets(username: str, user_id: str, max_results: int = 10) -> list[d
         tweet_id = tweet["id"]
         text = tweet["text"].strip()
         link = f"https://x.com/{username}/status/{tweet_id}"
-        tweets.append({"text": text[:280], "link": link})
+        public_metrics = tweet.get("public_metrics", {})
+        impressions = public_metrics.get("impression_count", 0)
+        tweets.append({"text": text[:280], "link": link, "impressions": impressions})
     return tweets
 
 def fetch_all_competitor_tweets() -> dict[str, list[dict]]:
@@ -91,6 +93,27 @@ def fetch_all_competitor_tweets() -> dict[str, list[dict]]:
         time.sleep(0.5)
     logger.info(f"Fetched X tweets for {len(result)} competitors")
     return result
+
+def build_top_posts(competitor_tweets: dict[str, list[dict]], top_n: int = 2) -> list[dict]:
+    """For each chain, pick top N tweets by impression count."""
+    result = []
+    for project, tweets in competitor_tweets.items():
+        sorted_tweets = sorted(tweets, key=lambda t: t.get("impressions", 0), reverse=True)
+        for t in sorted_tweets[:top_n]:
+            result.append({
+                "project":     project,
+                "title":       t["text"][:80],
+                "link":        t["link"],
+                "impressions": t.get("impressions", 0),
+            })
+    return result
+
+def format_impressions(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n/1_000:.1f}K"
+    return str(n)
 
 # ── RSS FETCH ─────────────────────────────────────────────────────────────────
 def fetch_feed(url: str, max_items: int = 8) -> list[dict]:
@@ -244,6 +267,12 @@ def build_digest() -> tuple[str, dict]:
     institutional_items = parse_bullets(raw_institutional)
     breaking_items      = parse_bullets(raw_breaking)
     competitor_block    = format_competitor_block(raw_competitors)
+    top_posts           = build_top_posts(competitor_tweets, top_n=2)
+
+    top_posts_block = "\n".join(
+        f"• [{p['title']}]({p['link']}) — {format_impressions(p['impressions'])} views"
+        for p in top_posts
+    ) if top_posts else "No data available today."
 
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
@@ -254,6 +283,9 @@ def build_digest() -> tuple[str, dict]:
         f"🔍 *NARRATIVES BY CHAINS*\n\n"
         f"{competitor_block}\n\n"
         f"{'─' * 28}\n\n"
+        f"🏆 *TOP PERFORMING POSTS*\n\n"
+        f"{top_posts_block}\n\n"
+        f"{'─' * 28}\n\n"
         f"🏦 *INSTITUTIONAL MOVES*\n\n"
         f"{raw_institutional}\n\n"
         f"{'─' * 28}\n\n"
@@ -263,6 +295,7 @@ def build_digest() -> tuple[str, dict]:
 
     sections = {
         "competitors":   competitor_items,
+        "top_posts":     top_posts,
         "institutional": institutional_items,
         "breaking":      breaking_items,
     }
@@ -300,6 +333,16 @@ def build_lark_card(digest_sections: dict) -> dict:
     )
     if competitor_content:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": competitor_content}})
+
+    elements.append({"tag": "hr"})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🏆 **TOP PERFORMING POSTS**"}})
+    elements.append({"tag": "hr"})
+    top_posts_content = "\n".join(
+        f"[{p['title']}]({p['link']}) — {format_impressions(p['impressions'])} views"
+        for p in digest_sections.get("top_posts", [])
+    )
+    if top_posts_content:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": top_posts_content}})
 
     elements.append({"tag": "hr"})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🏦 **INSTITUTIONAL MOVES**"}})
