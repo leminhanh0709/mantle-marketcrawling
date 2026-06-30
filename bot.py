@@ -94,7 +94,7 @@ def fetch_all_competitor_tweets() -> dict[str, list[dict]]:
     logger.info(f"Fetched X tweets for {len(result)} competitors")
     return result
 
-def build_top_posts(competitor_tweets: dict[str, list[dict]], top_n: int = 2) -> list[dict]:
+def build_top_posts(competitor_tweets: dict[str, list[dict]], top_n: int = 1) -> list[dict]:
     """For each chain, pick top N tweets by impression count."""
     result = []
     for project, tweets in competitor_tweets.items():
@@ -285,7 +285,7 @@ def parse_competitor_lines(raw: str) -> list[dict]:
     return items
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
-def build_digest() -> tuple[str, dict]:
+def build_digest() -> tuple[list[str], dict]:
     logger.info("Fetching X tweets…")
     competitor_tweets = fetch_all_competitor_tweets()
 
@@ -318,21 +318,14 @@ def build_digest() -> tuple[str, dict]:
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
 
-    telegram_text = (
-        f"📰 *CRYPTO NEWS DIGEST* — {date_str}\n"
-        f"{'─' * 28}\n\n"
-        f"🔍 *NARRATIVES BY CHAINS*\n\n"
-        f"{competitor_block}\n\n"
-        f"{'─' * 28}\n\n"
-        f"🏆 *TOP PERFORMING POSTS*\n\n"
-        f"{top_posts_block}\n\n"
-        f"{'─' * 28}\n\n"
-        f"🏦 *INSTITUTIONAL MOVES*\n\n"
-        f"{raw_institutional}\n\n"
-        f"{'─' * 28}\n\n"
-        f"⚡ *BREAKING & MARKET EVENTS*\n\n"
-        f"{raw_breaking}"
-    )
+    header = f"📰 *CRYPTO NEWS DIGEST* — {date_str}\n{'─' * 28}\n\n"
+
+    messages = [
+        header + f"🔍 *NARRATIVES BY CHAINS*\n\n{competitor_block}",
+        f"🏆 *TOP PERFORMING POSTS*\n\n{top_posts_block}",
+        f"🏦 *INSTITUTIONAL MOVES*\n\n{raw_institutional}",
+        f"⚡ *BREAKING & MARKET EVENTS*\n\n{raw_breaking}",
+    ]
 
     sections = {
         "competitors":   competitor_items,
@@ -341,46 +334,48 @@ def build_digest() -> tuple[str, dict]:
         "breaking":      breaking_items,
     }
 
-    return telegram_text, sections
+    return messages, sections
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
-def send_telegram(text: str) -> bool:
+def send_telegram_message(text: str) -> bool:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-
-    divider = "─" * 28
-    raw_parts = text.split(divider)
-
-    chunks = []
-    current = ""
-    for part in raw_parts:
-        candidate = current + (divider if current else "") + part
-        if len(candidate) > 3500:
-            if current:
-                chunks.append(current.strip())
-            current = part
-        else:
-            current = candidate
-    if current.strip():
-        chunks.append(current.strip())
-
-    ok = True
-    for chunk in chunks:
-        resp = requests.post(url, json={
-            "chat_id":                  TELEGRAM_CHAT_ID,
-            "text":                     chunk,
-            "parse_mode":               "Markdown",
+    resp = requests.post(url, json={
+        "chat_id":                  TELEGRAM_CHAT_ID,
+        "text":                     text,
+        "parse_mode":               "Markdown",
+        "disable_web_page_preview": True,
+    }, timeout=30)
+    if not resp.ok:
+        logger.error(f"Telegram error: {resp.text}")
+        resp2 = requests.post(url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": text,
             "disable_web_page_preview": True,
         }, timeout=30)
-        if not resp.ok:
-            logger.error(f"Telegram error: {resp.text}")
-            resp2 = requests.post(url, json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": chunk,
-                "disable_web_page_preview": True,
-            }, timeout=30)
-            if not resp2.ok:
-                logger.error(f"Telegram retry error: {resp2.text}")
-                ok = False
+        if not resp2.ok:
+            logger.error(f"Telegram retry error: {resp2.text}")
+            return False
+    return True
+
+def send_telegram_messages(messages: list[str]) -> bool:
+    ok = True
+    for msg in messages:
+        if len(msg) > 4000:
+            parts = msg.split("\n\n")
+            current = ""
+            for part in parts:
+                candidate = current + ("\n\n" if current else "") + part
+                if len(candidate) > 3800:
+                    if current:
+                        ok = send_telegram_message(current.strip()) and ok
+                    current = part
+                else:
+                    current = candidate
+            if current.strip():
+                ok = send_telegram_message(current.strip()) and ok
+        else:
+            ok = send_telegram_message(msg) and ok
+        time.sleep(0.3)
     return ok
 
 # ── LARK ──────────────────────────────────────────────────────────────────────
@@ -464,15 +459,15 @@ def send_lark(card: dict) -> bool:
 def run_job():
     logger.info("Running digest…")
     try:
-        telegram_text, sections = build_digest()
-        send_telegram(telegram_text)
+        messages, sections = build_digest()
+        send_telegram_messages(messages)
         # Lark temporarily disabled for testing
         # lark_card = build_lark_card(sections)
         # send_lark(lark_card)
-        logger.info("Digest sent to Telegram")
+        logger.info("Digest sent to Telegram (4 messages)")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
-        send_telegram(f"⚠️ Bot error: {e}")
+        send_telegram_message(f"⚠️ Bot error: {e}")
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
