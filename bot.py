@@ -100,7 +100,7 @@ def build_top_posts(competitor_tweets: dict[str, list[dict]], top_n: int = 2) ->
     for project, tweets in competitor_tweets.items():
         sorted_tweets = sorted(tweets, key=lambda t: t.get("impressions", 0), reverse=True)
         for t in sorted_tweets[:top_n]:
-            title = t["text"].split("\n")[0].strip()  # first line only, avoid mid-sentence cuts
+            title = t["text"].split("\n")[0].strip()
             if len(title) > 70:
                 title = title[:70].rsplit(" ", 1)[0] + "…"
             result.append({
@@ -272,7 +272,6 @@ def build_digest() -> tuple[str, dict]:
     competitor_block    = format_competitor_block(raw_competitors)
     top_posts           = build_top_posts(competitor_tweets, top_n=2)
 
-    # Group top posts by project for readability
     top_posts_by_project = {}
     for p in top_posts:
         top_posts_by_project.setdefault(p["project"], []).append(p)
@@ -315,7 +314,23 @@ def build_digest() -> tuple[str, dict]:
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
 def send_telegram(text: str) -> bool:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+
+    divider = "─" * 28
+    raw_parts = text.split(divider)
+
+    chunks = []
+    current = ""
+    for part in raw_parts:
+        candidate = current + (divider if current else "") + part
+        if len(candidate) > 3500:
+            if current:
+                chunks.append(current.strip())
+            current = part
+        else:
+            current = candidate
+    if current.strip():
+        chunks.append(current.strip())
+
     ok = True
     for chunk in chunks:
         resp = requests.post(url, json={
@@ -326,7 +341,14 @@ def send_telegram(text: str) -> bool:
         }, timeout=30)
         if not resp.ok:
             logger.error(f"Telegram error: {resp.text}")
-            ok = False
+            resp2 = requests.post(url, json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": chunk,
+                "disable_web_page_preview": True,
+            }, timeout=30)
+            if not resp2.ok:
+                logger.error(f"Telegram retry error: {resp2.text}")
+                ok = False
     return ok
 
 # ── LARK ──────────────────────────────────────────────────────────────────────
