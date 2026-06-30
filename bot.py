@@ -461,10 +461,10 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        # Lark temporarily disabled for testing
-        # lark_card = build_lark_card(sections)
-        # send_lark(lark_card)
-        logger.info("Digest sent to Telegram (4 messages)")
+        Lark temporarily disabled for testing
+        lark_card = build_lark_card(sections)
+        send_lark(lark_card)
+        logger.info("Digest sent to Telegram (4 messages) and Lark")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram_message(f"⚠️ Bot error: {e}")
