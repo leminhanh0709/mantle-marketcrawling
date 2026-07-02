@@ -262,7 +262,7 @@ def build_media_coverage_prompt(articles: list[dict]) -> str:
 
 DO NOT include: research reports, data analyses, opinion pieces, market outlooks.
 
-Score each on impact (1-10):
+Rank by impact:
 - Market-wide impact vs single project
 - Credibility and novelty
 - Actionable/immediate significance
@@ -272,7 +272,7 @@ Score each on impact (1-10):
 Output EXACTLY 5 lines ranked 1 to 5:
 RANK | One sentence summary (max 10 words) | link
 
-Output lines only, no extra text."""
+Do NOT include scores or numbers other than the rank. Output lines only, no extra text."""
 
 def parse_media_coverage(raw: str) -> list[dict]:
     items = []
