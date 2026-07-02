@@ -47,11 +47,14 @@ NEWS_FEEDS = [
 
 # ── RESEARCH RSS FEEDS ────────────────────────────────────────────────────────
 RESEARCH_FEEDS = [
-    "https://messari.io/rss/news.xml",
     "https://a16zcrypto.com/feed/",
-    "https://www.chainalysis.com/blog/feed/",
-    "https://www.galaxy.com/feed/",
-    "https://coinbase.com/blog/landing/institutional.rss",
+    "https://www.galaxy.com/insights/research/feed/",
+    "https://research.coinbase.com/feed",
+    "https://www.binance.com/research/rss",
+    "https://www.bcg.com/rss/articles?topic=blockchain",
+    "https://www.weforum.org/agenda/tag/blockchain/rss",
+    "https://www.imf.org/en/Blogs/rss",
+    "https://www.bis.org/rss/research.rss",
 ]
 
 NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins, Tokenization"
@@ -289,25 +292,32 @@ def format_market_intelligence_block(items: list[dict]) -> str:
 # ── SECTION 3: RESEARCH & REPORTS ────────────────────────────────────────────
 def build_research_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
-    return f"""You are curating a research briefing for C-level executives and institutional decision makers in crypto/blockchain.
+    return f"""You are curating a weekly research briefing for C-level executives and institutional decision makers in crypto/blockchain.
 
-From these articles, pick the TOP 3 most strategically valuable pieces. These should be macro-level, forward-looking, and relevant to business or investment decisions.
+From these articles, pick the TOP 3 that are STRATEGIC RESEARCH REPORTS — macro-level, forward-looking insights relevant to business or investment decisions.
 
-Ideal picks:
-- Industry state-of reports (State of RWA, State of DeFi, etc.)
-- Institutional adoption analyses
-- Macro market structure insights
-- Regulatory outlook pieces
-- Capital markets and tokenization trends
-- Strategic research from credible firms (Messari, a16z, Chainalysis, Galaxy, Coinbase Institutional, BCG, McKinsey)
+ONLY accept:
+- State-of-industry reports (State of RWA, State of DeFi, crypto adoption reports)
+- Institutional/enterprise blockchain adoption analyses
+- Macro market structure and capital markets research
+- Regulatory framework outlook and policy analyses
+- Tokenization trends and projections
+- Research from: a16z, Galaxy Research, Coinbase Institutional, BCG, McKinsey, WEF, IMF, BIS, Binance Research
 
-DO NOT include: technical tutorials, project-specific news, price analysis, event recaps, or anything a developer would read instead of a CFO.
+STRICTLY REJECT (do not pick these even if nothing else is available):
+- Breaking news or current events (sanctions, hacks, price moves)
+- Project-specific announcements
+- Technical tutorials or developer content
+- Event recaps or conference coverage
+- Anything written for traders or developers rather than executives
 
-Relevant narratives to prioritize: {NARRATIVES}
+If fewer than 3 qualify, output only the ones that truly qualify. Better to output 1-2 real research pieces than 3 mediocre ones.
+
+Relevant narratives: {NARRATIVES}
 
 {lines}
 
-Output EXACTLY 3 lines ranked 1 to 3:
+Output ranked lines (1 to max 3):
 RANK | NARRATIVE | Short strategic title (max 10 words) | link
 
 Output lines only, no extra text."""
