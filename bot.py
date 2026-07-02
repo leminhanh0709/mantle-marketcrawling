@@ -354,7 +354,7 @@ def format_research_block(items: list[dict]) -> str:
             f"{item['rank']}. *{item['source']}* `{item['narrative']}`\n"
             f"[{item['title']}]({item['link']})"
         )
-    return "\n\n".join(lines) if lines else "No notable research this week."
+    return "\n".join(lines) if lines else "No notable research this week."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
 def build_digest() -> tuple[list[str], dict]:
