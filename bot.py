@@ -289,19 +289,26 @@ def format_market_intelligence_block(items: list[dict]) -> str:
 # ── SECTION 3: RESEARCH & REPORTS ────────────────────────────────────────────
 def build_research_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
-    return f"""From these crypto research and analysis articles, pick the TOP 3 most relevant pieces related to current crypto narratives: {NARRATIVES}.
+    return f"""You are curating a research briefing for C-level executives and institutional decision makers in crypto/blockchain.
 
-Prioritize articles that:
-- Cover one of the narratives above directly (RWA, Infrastructure, Tokenization, DeFi, AI, Stablecoins, etc.)
-- Come from credible institutions (Messari, a16z, Chainalysis, Galaxy, Coinbase Institutional)
-- Are in-depth reports, data studies, market analyses, or research papers
+From these articles, pick the TOP 3 most strategically valuable pieces. These should be macro-level, forward-looking, and relevant to business or investment decisions.
 
-Skip: breaking news, price updates, basic event announcements, anything not related to the narratives above.
+Ideal picks:
+- Industry state-of reports (State of RWA, State of DeFi, etc.)
+- Institutional adoption analyses
+- Macro market structure insights
+- Regulatory outlook pieces
+- Capital markets and tokenization trends
+- Strategic research from credible firms (Messari, a16z, Chainalysis, Galaxy, Coinbase Institutional, BCG, McKinsey)
+
+DO NOT include: technical tutorials, project-specific news, price analysis, event recaps, or anything a developer would read instead of a CFO.
+
+Relevant narratives to prioritize: {NARRATIVES}
 
 {lines}
 
-Output EXACTLY 3 lines ranked 1 to 3 by relevance to current narratives:
-RANK | NARRATIVE | Short title (max 10 words) | link
+Output EXACTLY 3 lines ranked 1 to 3:
+RANK | NARRATIVE | Short strategic title (max 10 words) | link
 
 Output lines only, no extra text."""
 
