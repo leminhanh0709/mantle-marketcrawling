@@ -457,9 +457,17 @@ def build_lark_card(digest_sections: dict) -> dict:
     elements.append({"tag": "hr"})
     outstanding_lines = []
     for item in digest_sections.get("outstanding", []):
-        outstanding_lines.append(f"{item['rank']}. **{item['project']}** - {item['narrative']}\n[{item['summary']}]({item['link']})")
+        try:
+            imp = int(str(item.get("impressions", "0")).replace(",", ""))
+            imp_str = format_impressions(imp)
+        except Exception:
+            imp_str = ""
+        line = f"{item['rank']}. **{item['project']}** - {item['narrative']}\n[{item['summary']}]({item['link']})"
+        if imp_str:
+            line += f" — {imp_str} views"
+        outstanding_lines.append(line)
     if outstanding_lines:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n\n".join(outstanding_lines)}})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(outstanding_lines)}})
 
     elements.append({"tag": "hr"})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MEDIA COVERAGE**"}})
@@ -478,7 +486,7 @@ def build_lark_card(digest_sections: dict) -> dict:
     for item in digest_sections.get("research", []):
         research_lines.append(f"{item['rank']}. **{item['source']}** - {item['narrative']}\n[{item['title']}]({item['link']})")
     if research_lines:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n\n".join(research_lines)}})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(research_lines)}})
 
     return {
         "msg_type": "interactive",
@@ -512,9 +520,9 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        #lark_card = build_lark_card(sections)
-        #send_lark(lark_card)
-        logger.info("Digest sent to Telegram (3 messages)")
+        lark_card = build_lark_card(sections)
+        send_lark(lark_card)
+        logger.info("Digest sent to Telegram and Lark")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram_message(f"⚠️ Bot error: {e}")
