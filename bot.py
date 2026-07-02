@@ -78,69 +78,22 @@ def fetch_x_tweets(username: str, user_id: str, max_results: int = 10) -> list[d
         link = f"https://x.com/{username}/status/{tweet_id}"
         public_metrics = tweet.get("public_metrics", {})
         impressions = public_metrics.get("impression_count", 0)
-        tweets.append({"text": text[:280], "link": link, "impressions": impressions})
+        tweets.append({"text": text[:280], "link": link, "impressions": impressions, "project": ""})
     return tweets
 
-def fetch_all_competitor_tweets() -> dict[str, list[dict]]:
-    result = {}
+def fetch_all_competitor_tweets() -> list[dict]:
+    all_tweets = []
     for username, display_name in COMPETITORS.items():
         user_id = get_x_user_id(username)
         if not user_id:
             continue
         tweets = fetch_x_tweets(username, user_id, max_results=10)
-        if tweets:
-            result[display_name] = tweets
+        for t in tweets:
+            t["project"] = display_name
+        all_tweets.extend(tweets)
         time.sleep(0.5)
-    logger.info(f"Fetched X tweets for {len(result)} competitors")
-    return result
-
-def build_top_posts(competitor_tweets: dict[str, list[dict]], top_n: int = 1) -> list[dict]:
-    """For each chain, pick top N tweets by impression count."""
-    result = []
-    for project, tweets in competitor_tweets.items():
-        sorted_tweets = sorted(tweets, key=lambda t: t.get("impressions", 0), reverse=True)
-        for t in sorted_tweets[:top_n]:
-            title = t["text"].split("\n")[0].strip()
-            if len(title) > 70:
-                title = title[:70].rsplit(" ", 1)[0] + "…"
-            result.append({
-                "project":     project,
-                "title":       title,
-                "link":        t["link"],
-                "impressions": t.get("impressions", 0),
-            })
-    return result
-
-def build_top_posts_prompt(top_posts: list[dict]) -> str:
-    lines = "\n".join(f"{i}: [{p['project']}] {p['title']}" for i, p in enumerate(top_posts))
-    return f"""Summarize each tweet below into ONE short, clear sentence (max 12 words) explaining what it announces or means. If a tweet is vague, cryptic, or meaningless (like teasers, emojis, "shhhh"), infer the likely meaning briefly or write "Teaser post — no clear details yet."
-
-{lines}
-
-Output EXACTLY one line per index, in this format:
-INDEX: summary sentence
-
-Output lines only, no extra text."""
-
-def summarize_top_posts(top_posts: list[dict]) -> list[dict]:
-    if not top_posts:
-        return []
-    prompt = build_top_posts_prompt(top_posts)
-    raw = call_claude(prompt, max_tokens=600)
-    summary_map = {}
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if not line or ":" not in line:
-            continue
-        idx_str, summary = line.split(":", 1)
-        try:
-            idx = int(idx_str.strip())
-            summary_map[idx] = summary.strip()
-        except ValueError:
-            continue
-    for i, p in enumerate(top_posts):
-        p["summary"] = summary_map.get(i, p["title"])
-    return top_posts
+    logger.info(f"Fetched {len(all_tweets)} total competitor tweets")
+    return all_tweets
 
 def format_impressions(n: int) -> str:
     if n >= 1_000_000:
@@ -178,7 +131,7 @@ def fetch_crypto_news() -> list[dict]:
     for url in CRYPTO_FEEDS:
         articles.extend(fetch_feed(url, max_items=5))
     logger.info(f"Fetched {len(articles)} crypto articles")
-    return articles[:30]
+    return articles[:40]
 
 # ── CLAUDE ────────────────────────────────────────────────────────────────────
 def call_claude(prompt: str, max_tokens: int = 600) -> str:
@@ -191,147 +144,170 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
     )
     return msg.content[0].text.strip()
 
-# ── PROMPTS ───────────────────────────────────────────────────────────────────
-def build_competitor_prompt(competitor_tweets: dict[str, list[dict]]) -> str:
-    lines = []
-    for project, tweets in competitor_tweets.items():
-        lines.append(f"\n### {project}")
-        for t in tweets:
-            lines.append(f"- {t['text']} | {t['link']}")
-    return f"""These are recent tweets from competitor crypto projects:
-{"".join(lines)}
+# ── SECTION 1: OUTSTANDING INDUSTRY POSTS ────────────────────────────────────
+def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
+    lines = "\n".join(
+        f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
+        for i, t in enumerate(all_tweets)
+    )
+    return f"""You are analyzing tweets from crypto competitor projects. Pick the TOP 5 most impactful posts overall (not per chain).
 
-For each project, pick the SINGLE most valuable tweet from last 24h.
-Only include: RWA updates, trend/narrative setting, market reports, product launches, protocol upgrades, partnerships, ecosystem news.
-Skip: price talk, memes, generic hype, event promos, retweets.
+Score each tweet on impact (1-10) based on:
+- Market significance (affects whole industry vs one project)
+- Novelty (new announcement vs repeated info)
+- Concrete action (real deal/number/launch vs vague teaser)
+- Source credibility
 
-Output one line per project exactly:
-PROJECT | NARRATIVE | Short summary (max 10 words) | link
+Final rank = (impression_score * 0.4) + (impact_score * 0.6)
+Where impression_score = normalized 1-10 from impressions count.
+
+Tweets:
+{lines}
+
+Output EXACTLY 5 lines, ranked 1 to 5 by final score:
+RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
-Skip projects with nothing valuable. Output lines only."""
+Skip price/hype/meme tweets. Output lines only."""
 
-def build_institutional_prompt(articles: list[dict]) -> str:
-    lines = "\n".join(f"{a['title']} | {a['link']}" for a in articles)
-    return f"""Pick 3 most significant institutional moves related to RWA, tokenization, or crypto adoption (banks, funds, governments, enterprises).
-No price news.
-
-{lines}
-
-Format (Markdown hyperlink):
-- [Short title max 10 words](link)
-
-3 bullets only."""
-
-def build_breaking_prompt(articles: list[dict]) -> str:
-    lines = "\n".join(f"{a['title']} | {a['link']}" for a in articles)
-    return f"""Pick 3 biggest breaking crypto events with wide market impact (hacks, regulation, major protocol events, industry shifts).
-No price/token crash news.
-
-{lines}
-
-Format (Markdown hyperlink):
-- [Short title max 10 words](link)
-
-3 bullets only."""
-
-# ── FORMAT & PARSE ────────────────────────────────────────────────────────────
-def format_competitor_block(raw: str) -> str:
-    lines = []
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) == 4:
-            project, narrative, title, link = parts
-            lines.append(f"• *{project}* `{narrative}` — [{title}]({link})")
-        elif len(parts) == 3:
-            project, narrative, title = parts
-            lines.append(f"• *{project}* `{narrative}` — {title}")
-    return "\n".join(lines) if lines else "No significant updates today."
-
-def parse_bullets(raw: str) -> list[dict]:
-    items = []
-    for line in raw.strip().split("\n"):
-        line = line.strip().lstrip("•-*[").strip()
-        if not line:
-            continue
-        if line.startswith("[") and "](" in line and line.endswith(")"):
-            title = line[1:line.index("](")]
-            link  = line[line.index("](")+2:-1]
-            items.append({"title": title, "link": link})
-        elif " — " in line:
-            parts = line.split(" — ", 1)
-            items.append({"title": parts[0].strip(), "link": parts[1].strip()})
-        else:
-            items.append({"title": line, "link": ""})
-    return items
-
-def parse_competitor_lines(raw: str) -> list[dict]:
+def parse_outstanding_posts(raw: str) -> list[dict]:
     items = []
     for line in raw.strip().split("\n"):
         line = line.strip()
         if not line:
             continue
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) == 4:
+        if len(parts) >= 5:
             items.append({
-                "project":   parts[0],
-                "narrative": parts[1],
-                "title":     parts[2],
-                "link":      parts[3],
+                "rank":        parts[0],
+                "project":     parts[1],
+                "narrative":   parts[2],
+                "summary":     parts[3],
+                "link":        parts[4],
+                "impressions": parts[5] if len(parts) > 5 else "0",
             })
     return items
+
+def format_outstanding_block(items: list[dict]) -> str:
+    lines = []
+    for item in items:
+        try:
+            imp = int(item["impressions"].replace(",", ""))
+            imp_str = format_impressions(imp)
+        except Exception:
+            imp_str = item["impressions"]
+        lines.append(
+            f"{item['rank']}. *{item['project']}* `{item['narrative']}`\n"
+            f"   [{item['summary']}]({item['link']}) — {imp_str} views"
+        )
+    return "\n\n".join(lines) if lines else "No significant posts today."
+
+# ── SECTION 2: MARKET INTELLIGENCE ───────────────────────────────────────────
+def build_market_intelligence_prompt(articles: list[dict]) -> str:
+    lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
+    return f"""From these crypto news headlines, pick the TOP 5 most impactful stories combining institutional moves, breaking events, regulation, and market shifts.
+
+Score each on impact (1-10):
+- Market-wide impact vs single project
+- Credibility and novelty
+- Actionable information
+
+{lines}
+
+Output EXACTLY 5 lines ranked 1 to 5:
+RANK | One sentence summary (max 10 words) | link
+
+Output lines only, no extra text."""
+
+def parse_market_intelligence(raw: str) -> list[dict]:
+    items = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 3:
+            items.append({
+                "rank":    parts[0],
+                "summary": parts[1],
+                "link":    parts[2],
+            })
+    return items
+
+def format_market_intelligence_block(items: list[dict]) -> str:
+    lines = []
+    for item in items:
+        lines.append(f"{item['rank']}. [{item['summary']}]({item['link']})")
+    return "\n".join(lines) if lines else "No significant market news today."
+
+# ── SECTION 3: MEDIA COVERAGE ─────────────────────────────────────────────────
+def build_media_coverage_prompt(articles: list[dict]) -> str:
+    lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
+    return f"""From these crypto news headlines, pick the TOP 3 most important reports, research, or in-depth analyses (not breaking news — focus on reports, studies, data releases, market analyses).
+
+{lines}
+
+Output EXACTLY 3 lines ranked 1 to 3:
+RANK | Short title (max 10 words) | link
+
+Output lines only, no extra text."""
+
+def parse_media_coverage(raw: str) -> list[dict]:
+    items = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 3:
+            items.append({
+                "rank":  parts[0],
+                "title": parts[1],
+                "link":  parts[2],
+            })
+    return items
+
+def format_media_coverage_block(items: list[dict]) -> str:
+    lines = []
+    for item in items:
+        lines.append(f"{item['rank']}. [{item['title']}]({item['link']})")
+    return "\n".join(lines) if lines else "No notable reports today."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
 def build_digest() -> tuple[list[str], dict]:
     logger.info("Fetching X tweets…")
-    competitor_tweets = fetch_all_competitor_tweets()
+    all_tweets = fetch_all_competitor_tweets()
 
     logger.info("Fetching RSS news…")
     crypto_articles = fetch_crypto_news()
 
-    logger.info("Calling Claude…")
-    raw_competitors   = call_claude(build_competitor_prompt(competitor_tweets), max_tokens=800)
-    raw_institutional = call_claude(build_institutional_prompt(crypto_articles), max_tokens=400)
-    raw_breaking      = call_claude(build_breaking_prompt(crypto_articles), max_tokens=400)
+    logger.info("Calling Claude (3 calls)…")
+    raw_outstanding  = call_claude(build_outstanding_posts_prompt(all_tweets), max_tokens=800)
+    raw_intelligence = call_claude(build_market_intelligence_prompt(crypto_articles), max_tokens=600)
+    raw_media        = call_claude(build_media_coverage_prompt(crypto_articles), max_tokens=400)
 
-    competitor_items    = parse_competitor_lines(raw_competitors)
-    institutional_items = parse_bullets(raw_institutional)
-    breaking_items      = parse_bullets(raw_breaking)
-    competitor_block    = format_competitor_block(raw_competitors)
-    top_posts           = build_top_posts(competitor_tweets, top_n=2)
-    top_posts           = summarize_top_posts(top_posts)
+    outstanding_items  = parse_outstanding_posts(raw_outstanding)
+    intelligence_items = parse_market_intelligence(raw_intelligence)
+    media_items        = parse_media_coverage(raw_media)
 
-    top_posts_by_project = {}
-    for p in top_posts:
-        top_posts_by_project.setdefault(p["project"], []).append(p)
-
-    top_posts_lines = []
-    for project, posts in top_posts_by_project.items():
-        top_posts_lines.append(f"*{project}*")
-        for p in posts:
-            top_posts_lines.append(f"  • [{p.get('summary', p['title'])}]({p['link']}) — {format_impressions(p['impressions'])} views")
-    top_posts_block = "\n".join(top_posts_lines) if top_posts_lines else "No data available today."
+    outstanding_block  = format_outstanding_block(outstanding_items)
+    intelligence_block = format_market_intelligence_block(intelligence_items)
+    media_block        = format_media_coverage_block(media_items)
 
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
-
-    header = f"📰 *CRYPTO NEWS DIGEST* — {date_str}\n{'─' * 28}\n\n"
+    header   = f"📰 *CRYPTO NEWS DIGEST* — {date_str}\n{'─' * 28}\n\n"
 
     messages = [
-        header + f"🔍 *NARRATIVES BY CHAINS*\n\n{competitor_block}",
-        f"🏆 *TOP PERFORMING POSTS*\n\n{top_posts_block}",
-        f"🏦 *INSTITUTIONAL MOVES*\n\n{raw_institutional}",
-        f"⚡ *BREAKING & MARKET EVENTS*\n\n{raw_breaking}",
+        header + f"📢 *OUTSTANDING INDUSTRY POSTS*\n\n{outstanding_block}",
+        f"📡 *MARKET INTELLIGENCE*\n\n{intelligence_block}",
+        f"📰 *MEDIA COVERAGE*\n\n{media_block}",
     ]
 
     sections = {
-        "competitors":   competitor_items,
-        "top_posts":     top_posts,
-        "institutional": institutional_items,
-        "breaking":      breaking_items,
+        "outstanding":  outstanding_items,
+        "intelligence": intelligence_items,
+        "media":        media_items,
     }
 
     return messages, sections
@@ -349,7 +325,7 @@ def send_telegram_message(text: str) -> bool:
         logger.error(f"Telegram error: {resp.text}")
         resp2 = requests.post(url, json={
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
+            "text":    text,
             "disable_web_page_preview": True,
         }, timeout=30)
         if not resp2.ok:
@@ -384,56 +360,39 @@ def build_lark_card(digest_sections: dict) -> dict:
     date_str = vn_time.strftime("%d/%m/%Y")
     elements = []
 
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🔍 **NARRATIVES BY CHAINS**"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📢 **OUTSTANDING INDUSTRY POSTS**"}})
     elements.append({"tag": "hr"})
-    competitor_content = "\n".join(
-        f"**{item['project']}** - {item['narrative']}\n[{item['title']}]({item['link']})"
-        for item in digest_sections.get("competitors", [])
-    )
-    if competitor_content:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": competitor_content}})
+    outstanding_lines = []
+    for item in digest_sections.get("outstanding", []):
+        outstanding_lines.append(f"{item['rank']}. **{item['project']}** - {item['narrative']}\n[{item['summary']}]({item['link']})")
+    if outstanding_lines:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n\n".join(outstanding_lines)}})
 
     elements.append({"tag": "hr"})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🏆 **TOP PERFORMING POSTS**"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MARKET INTELLIGENCE**"}})
     elements.append({"tag": "hr"})
-    top_posts = digest_sections.get("top_posts", [])
-    top_posts_by_project = {}
-    for p in top_posts:
-        top_posts_by_project.setdefault(p["project"], []).append(p)
-    top_posts_lines = []
-    for project, posts in top_posts_by_project.items():
-        top_posts_lines.append(f"**{project}**")
-        for p in posts:
-            top_posts_lines.append(f"[{p.get('summary', p['title'])}]({p['link']}) — {format_impressions(p['impressions'])} views")
-    top_posts_content = "\n".join(top_posts_lines)
-    if top_posts_content:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": top_posts_content}})
+    intel_lines = "\n".join(
+        f"{item['rank']}. [{item['summary']}]({item['link']})"
+        for item in digest_sections.get("intelligence", [])
+    )
+    if intel_lines:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": intel_lines}})
 
     elements.append({"tag": "hr"})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🏦 **INSTITUTIONAL MOVES**"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📰 **MEDIA COVERAGE**"}})
     elements.append({"tag": "hr"})
-    institutional_content = "\n".join(
-        f"[{item['title']}]({item['link']})"
-        for item in digest_sections.get("institutional", [])
+    media_lines = "\n".join(
+        f"{item['rank']}. [{item['title']}]({item['link']})"
+        for item in digest_sections.get("media", [])
     )
-    if institutional_content:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": institutional_content}})
-
-    elements.append({"tag": "hr"})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "⚡ **BREAKING & MARKET EVENTS**"}})
-    elements.append({"tag": "hr"})
-    breaking_content = "\n".join(
-        f"[{item['title']}]({item['link']})"
-        for item in digest_sections.get("breaking", [])
-    )
-    if breaking_content:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": breaking_content}})
+    if media_lines:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": media_lines}})
 
     return {
         "msg_type": "interactive",
         "card": {
             "header": {
-                "title": {"tag": "plain_text", "content": f"📰 CRYPTO NEWS DIGEST — {date_str}"},
+                "title":    {"tag": "plain_text", "content": f"📰 CRYPTO NEWS DIGEST — {date_str}"},
                 "template": "blue"
             },
             "elements": elements
@@ -461,9 +420,10 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        lark_card = build_lark_card(sections)
-        send_lark(lark_card)
-        logger.info("Digest sent to Telegram (4 messages) and Lark")
+        # Lark disabled for testing — enable when final
+        # lark_card = build_lark_card(sections)
+        # send_lark(lark_card)
+        logger.info("Digest sent to Telegram (3 messages)")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram_message(f"⚠️ Bot error: {e}")
