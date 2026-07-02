@@ -512,8 +512,8 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        lark_card = build_lark_card(sections)
-        send_lark(lark_card)
+        #lark_card = build_lark_card(sections)
+        #send_lark(lark_card)
         logger.info("Digest sent to Telegram (3 messages)")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
