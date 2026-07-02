@@ -146,29 +146,21 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
 
 # ── SECTION 1: OUTSTANDING INDUSTRY POSTS ────────────────────────────────────
 def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
+    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:20]
     lines = "\n".join(
         f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
-        for i, t in enumerate(all_tweets)
+        for i, t in enumerate(sorted_tweets)
     )
-    return f"""You are analyzing tweets from crypto competitor projects. Pick the TOP 5 most impactful posts overall (not per chain).
-
-Score each tweet on impact (1-10) based on:
-- Market significance (affects whole industry vs one project)
-- Novelty (new announcement vs repeated info)
-- Concrete action (real deal/number/launch vs vague teaser)
-- Source credibility
-
-Final rank = (impression_score * 0.4) + (impact_score * 0.6)
-Where impression_score = normalized 1-10 from impressions count.
+    return f"""From these tweets (already sorted by impressions), pick the TOP 5. Skip price/hype/meme/teaser tweets — only include: product launches, partnerships, protocol upgrades, RWA, institutional moves, ecosystem news.
 
 Tweets:
 {lines}
 
-Output EXACTLY 5 lines, ranked 1 to 5 by final score:
+Output EXACTLY 5 lines ranked 1 to 5 by impressions:
 RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
-Skip price/hype/meme tweets. Output lines only."""
+Output lines only."""
 
 def parse_outstanding_posts(raw: str) -> list[dict]:
     items = []
@@ -198,19 +190,21 @@ def format_outstanding_block(items: list[dict]) -> str:
             imp_str = item["impressions"]
         lines.append(
             f"{item['rank']}. *{item['project']}* `{item['narrative']}`\n"
-            f"   [{item['summary']}]({item['link']}) — {imp_str} views"
+            f"[{item['summary']}]({item['link']}) — {imp_str} views"
         )
     return "\n\n".join(lines) if lines else "No significant posts today."
 
 # ── SECTION 2: MARKET INTELLIGENCE ───────────────────────────────────────────
 def build_market_intelligence_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
-    return f"""From these crypto news headlines, pick the TOP 5 most impactful stories combining institutional moves, breaking events, regulation, and market shifts.
+    return f"""From these crypto news headlines, pick the TOP 5 most impactful CURRENT EVENTS — things happening right now: regulatory decisions, institutional deals, protocol launches, partnerships, industry moves. These should be time-sensitive news that affects the market immediately.
+
+DO NOT include: research reports, data analyses, opinion pieces, market outlooks, or "state of" articles.
 
 Score each on impact (1-10):
 - Market-wide impact vs single project
 - Credibility and novelty
-- Actionable information
+- Actionable/immediate significance
 
 {lines}
 
@@ -241,9 +235,13 @@ def format_market_intelligence_block(items: list[dict]) -> str:
     return "\n".join(lines) if lines else "No significant market news today."
 
 # ── SECTION 3: MEDIA COVERAGE ─────────────────────────────────────────────────
-def build_media_coverage_prompt(articles: list[dict]) -> str:
-    lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
-    return f"""From these crypto news headlines, pick the TOP 3 most important reports, research, or in-depth analyses (not breaking news — focus on reports, studies, data releases, market analyses).
+def build_media_coverage_prompt(articles: list[dict], exclude_links: list[str]) -> str:
+    filtered = [a for a in articles if a["link"] not in exclude_links]
+    lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(filtered))
+    return f"""From these crypto news headlines, pick the TOP 3 most valuable RESEARCH & ANALYSIS pieces — reports, data releases, market analyses, research papers, opinion from credible institutions, "state of" industry reports.
+
+DO NOT include: breaking news, price updates, event announcements, or anything already covered as current events.
+ONLY include: in-depth analysis, research reports, data-driven insights, thought leadership from credible sources.
 
 {lines}
 
@@ -284,11 +282,14 @@ def build_digest() -> tuple[list[str], dict]:
     logger.info("Calling Claude (3 calls)…")
     raw_outstanding  = call_claude(build_outstanding_posts_prompt(all_tweets), max_tokens=800)
     raw_intelligence = call_claude(build_market_intelligence_prompt(crypto_articles), max_tokens=600)
-    raw_media        = call_claude(build_media_coverage_prompt(crypto_articles), max_tokens=400)
 
-    outstanding_items  = parse_outstanding_posts(raw_outstanding)
     intelligence_items = parse_market_intelligence(raw_intelligence)
-    media_items        = parse_media_coverage(raw_media)
+    exclude_links = [item["link"] for item in intelligence_items]
+
+    raw_media = call_claude(build_media_coverage_prompt(crypto_articles, exclude_links), max_tokens=400)
+
+    outstanding_items = parse_outstanding_posts(raw_outstanding)
+    media_items       = parse_media_coverage(raw_media)
 
     outstanding_block  = format_outstanding_block(outstanding_items)
     intelligence_block = format_market_intelligence_block(intelligence_items)
