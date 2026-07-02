@@ -17,6 +17,8 @@ TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
 X_BEARER_TOKEN     = os.environ["X_BEARER_TOKEN"]
 LARK_WEBHOOK_URL   = os.environ.get("LARK_WEBHOOK_URL", "")
+SUPABASE_URL       = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY       = os.environ.get("SUPABASE_KEY", "")
 RUN_ON_START       = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
 # ── COMPETITORS ───────────────────────────────────────────────────────────────
@@ -112,10 +114,10 @@ def format_impressions(n: int) -> str:
     return str(n)
 
 # ── RSS FETCH ─────────────────────────────────────────────────────────────────
-def fetch_feed(url: str, max_items: int = 8) -> list[dict]:
+def fetch_feed(url: str, max_items: int = 8, days: int = 1) -> list[dict]:
     try:
         feed = feedparser.parse(url)
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         items = []
         for entry in feed.entries[:max_items]:
             published = None
@@ -138,16 +140,50 @@ def fetch_feed(url: str, max_items: int = 8) -> list[dict]:
 def fetch_news() -> list[dict]:
     articles = []
     for url in NEWS_FEEDS:
-        articles.extend(fetch_feed(url, max_items=5))
+        articles.extend(fetch_feed(url, max_items=5, days=1))
     logger.info(f"Fetched {len(articles)} news articles")
     return articles[:40]
 
 def fetch_research() -> list[dict]:
     articles = []
     for url in RESEARCH_FEEDS:
-        articles.extend(fetch_feed(url, max_items=8))
+        articles.extend(fetch_feed(url, max_items=8, days=7))
     logger.info(f"Fetched {len(articles)} research articles")
     return articles[:30]
+
+# ── SUPABASE ──────────────────────────────────────────────────────────────────
+SUPABASE_HEADERS = {
+    "apikey":        SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type":  "application/json",
+}
+
+def get_sent_research_links() -> set[str]:
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/sent_research?select=link",
+            headers=SUPABASE_HEADERS,
+            timeout=10,
+        )
+        if resp.ok:
+            return {row["link"] for row in resp.json()}
+    except Exception as e:
+        logger.warning(f"Supabase fetch failed: {e}")
+    return set()
+
+def save_sent_research_links(links: list[str]) -> None:
+    if not links:
+        return
+    try:
+        rows = [{"link": link} for link in links]
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/sent_research",
+            headers={**SUPABASE_HEADERS, "Prefer": "ignore-duplicates"},
+            json=rows,
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning(f"Supabase save failed: {e}")
 
 # ── CLAUDE ────────────────────────────────────────────────────────────────────
 def call_claude(prompt: str, max_tokens: int = 600) -> str:
@@ -210,7 +246,7 @@ def format_outstanding_block(items: list[dict]) -> str:
         )
     return "\n\n".join(lines) if lines else "No significant posts today."
 
-# ── SECTION 2: MARKET INTELLIGENCE ───────────────────────────────────────────
+# ── SECTION 2: MEDIA COVERAGE ─────────────────────────────────────────────────
 def build_market_intelligence_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
     return f"""From these crypto news headlines, pick the TOP 5 most impactful CURRENT EVENTS — regulatory decisions, institutional deals, protocol launches, partnerships, industry moves. Time-sensitive news that affects the market immediately.
@@ -252,6 +288,8 @@ def format_market_intelligence_block(items: list[dict]) -> str:
 
 # ── SECTION 3: RESEARCH & REPORTS ────────────────────────────────────────────
 def build_research_prompt(articles: list[dict]) -> str:
+    if not articles:
+        return ""
     lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
     return f"""From these crypto research and analysis articles, pick the TOP 3 most valuable pieces — in-depth reports, data studies, market analyses, research papers, thought leadership from credible institutions (Messari, a16z, Chainalysis, Galaxy, Coinbase Institutional, etc).
 
@@ -295,14 +333,24 @@ def build_digest() -> tuple[list[str], dict]:
     news_articles     = fetch_news()
     research_articles = fetch_research()
 
+    sent_links     = get_sent_research_links()
+    fresh_research = [a for a in research_articles if a["link"] not in sent_links]
+    logger.info(f"Fresh research articles after dedup: {len(fresh_research)}")
+
     logger.info("Calling Claude (3 calls)…")
     raw_outstanding  = call_claude(build_outstanding_posts_prompt(all_tweets), max_tokens=800)
     raw_intelligence = call_claude(build_market_intelligence_prompt(news_articles), max_tokens=600)
-    raw_research     = call_claude(build_research_prompt(research_articles), max_tokens=400)
+
+    research_prompt = build_research_prompt(fresh_research)
+    if research_prompt:
+        raw_research   = call_claude(research_prompt, max_tokens=400)
+        research_items = parse_research(raw_research)
+        save_sent_research_links([item["link"] for item in research_items])
+    else:
+        research_items = []
 
     outstanding_items  = parse_outstanding_posts(raw_outstanding)
     intelligence_items = parse_market_intelligence(raw_intelligence)
-    research_items     = parse_research(raw_research)
 
     outstanding_block  = format_outstanding_block(outstanding_items)
     intelligence_block = format_market_intelligence_block(intelligence_items)
@@ -314,7 +362,7 @@ def build_digest() -> tuple[list[str], dict]:
 
     messages = [
         header + f"📢 *OUTSTANDING INDUSTRY POSTS*\n\n{outstanding_block}",
-        f"📡 *MARKET INTELLIGENCE*\n\n{intelligence_block}",
+        f"📡 *MEDIA COVERAGE*\n\n{intelligence_block}",
         f"📊 *RESEARCH & REPORTS*\n\n{research_block}",
     ]
 
@@ -383,7 +431,7 @@ def build_lark_card(digest_sections: dict) -> dict:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n\n".join(outstanding_lines)}})
 
     elements.append({"tag": "hr"})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MARKET INTELLIGENCE**"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MEDIA COVERAGE**"}})
     elements.append({"tag": "hr"})
     intel_lines = "\n".join(
         f"{item['rank']}. [{item['summary']}]({item['link']})"
