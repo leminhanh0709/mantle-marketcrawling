@@ -288,18 +288,20 @@ def format_market_intelligence_block(items: list[dict]) -> str:
 
 # ── SECTION 3: RESEARCH & REPORTS ────────────────────────────────────────────
 def build_research_prompt(articles: list[dict]) -> str:
-    if not articles:
-        return ""
     lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
-    return f"""From these crypto research and analysis articles, pick the TOP 3 most valuable pieces — in-depth reports, data studies, market analyses, research papers, thought leadership from credible institutions (Messari, a16z, Chainalysis, Galaxy, Coinbase Institutional, etc).
+    return f"""From these crypto research and analysis articles, pick the TOP 3 most relevant pieces related to current crypto narratives: {NARRATIVES}.
 
-ONLY include: research reports, data-driven analyses, industry studies, institutional perspectives.
-Skip: breaking news, price updates, basic event announcements.
+Prioritize articles that:
+- Cover one of the narratives above directly (RWA, Infrastructure, Tokenization, DeFi, AI, Stablecoins, etc.)
+- Come from credible institutions (Messari, a16z, Chainalysis, Galaxy, Coinbase Institutional)
+- Are in-depth reports, data studies, market analyses, or research papers
+
+Skip: breaking news, price updates, basic event announcements, anything not related to the narratives above.
 
 {lines}
 
-Output EXACTLY 3 lines ranked 1 to 3:
-RANK | Short title (max 10 words) | link
+Output EXACTLY 3 lines ranked 1 to 3 by relevance to current narratives:
+RANK | NARRATIVE | Short title (max 10 words) | link
 
 Output lines only, no extra text."""
 
@@ -310,18 +312,29 @@ def parse_research(raw: str) -> list[dict]:
         if not line:
             continue
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 3:
+        if len(parts) >= 4:
             items.append({
-                "rank":  parts[0],
-                "title": parts[1],
-                "link":  parts[2],
+                "rank":      parts[0],
+                "narrative": parts[1],
+                "title":     parts[2],
+                "link":      parts[3],
+            })
+        elif len(parts) == 3:
+            items.append({
+                "rank":      parts[0],
+                "narrative": "",
+                "title":     parts[1],
+                "link":      parts[2],
             })
     return items
 
 def format_research_block(items: list[dict]) -> str:
     lines = []
     for item in items:
-        lines.append(f"{item['rank']}. [{item['title']}]({item['link']})")
+        if item.get("narrative"):
+            lines.append(f"{item['rank']}. `{item['narrative']}` — [{item['title']}]({item['link']})")
+        else:
+            lines.append(f"{item['rank']}. [{item['title']}]({item['link']})")
     return "\n".join(lines) if lines else "No notable research today."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
@@ -341,9 +354,8 @@ def build_digest() -> tuple[list[str], dict]:
     raw_outstanding  = call_claude(build_outstanding_posts_prompt(all_tweets), max_tokens=800)
     raw_intelligence = call_claude(build_market_intelligence_prompt(news_articles), max_tokens=600)
 
-    research_prompt = build_research_prompt(fresh_research)
-    if research_prompt:
-        raw_research   = call_claude(research_prompt, max_tokens=400)
+    if fresh_research:
+        raw_research   = call_claude(build_research_prompt(fresh_research), max_tokens=400)
         research_items = parse_research(raw_research)
         save_sent_research_links([item["link"] for item in research_items])
     else:
@@ -444,6 +456,8 @@ def build_lark_card(digest_sections: dict) -> dict:
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📊 **RESEARCH & REPORTS**"}})
     elements.append({"tag": "hr"})
     research_lines = "\n".join(
+        f"{item['rank']}. `{item.get('narrative', '')}` — [{item['title']}]({item['link']})"
+        if item.get("narrative") else
         f"{item['rank']}. [{item['title']}]({item['link']})"
         for item in digest_sections.get("research", [])
     )
