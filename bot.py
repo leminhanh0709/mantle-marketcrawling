@@ -33,14 +33,23 @@ COMPETITORS = {
     "OndoFinance":  "Ondo Finance",
 }
 
-# ── CRYPTO RSS FEEDS ──────────────────────────────────────────────────────────
-CRYPTO_FEEDS = [
+# ── NEWS RSS FEEDS ────────────────────────────────────────────────────────────
+NEWS_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
     "https://www.theblock.co/rss.xml",
     "https://decrypt.co/feed",
     "https://bitcoinmagazine.com/.rss/full/",
     "https://www.dlnews.com/arc/outboundfeeds/rss/",
+]
+
+# ── RESEARCH RSS FEEDS ────────────────────────────────────────────────────────
+RESEARCH_FEEDS = [
+    "https://messari.io/rss/news.xml",
+    "https://a16zcrypto.com/feed/",
+    "https://www.chainalysis.com/blog/feed/",
+    "https://www.galaxy.com/feed/",
+    "https://coinbase.com/blog/landing/institutional.rss",
 ]
 
 NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins, Tokenization"
@@ -126,12 +135,19 @@ def fetch_feed(url: str, max_items: int = 8) -> list[dict]:
         logger.warning(f"Failed {url}: {e}")
         return []
 
-def fetch_crypto_news() -> list[dict]:
+def fetch_news() -> list[dict]:
     articles = []
-    for url in CRYPTO_FEEDS:
+    for url in NEWS_FEEDS:
         articles.extend(fetch_feed(url, max_items=5))
-    logger.info(f"Fetched {len(articles)} crypto articles")
+    logger.info(f"Fetched {len(articles)} news articles")
     return articles[:40]
+
+def fetch_research() -> list[dict]:
+    articles = []
+    for url in RESEARCH_FEEDS:
+        articles.extend(fetch_feed(url, max_items=8))
+    logger.info(f"Fetched {len(articles)} research articles")
+    return articles[:30]
 
 # ── CLAUDE ────────────────────────────────────────────────────────────────────
 def call_claude(prompt: str, max_tokens: int = 600) -> str:
@@ -197,9 +213,9 @@ def format_outstanding_block(items: list[dict]) -> str:
 # ── SECTION 2: MARKET INTELLIGENCE ───────────────────────────────────────────
 def build_market_intelligence_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
-    return f"""From these crypto news headlines, pick the TOP 5 most impactful CURRENT EVENTS — things happening right now: regulatory decisions, institutional deals, protocol launches, partnerships, industry moves. These should be time-sensitive news that affects the market immediately.
+    return f"""From these crypto news headlines, pick the TOP 5 most impactful CURRENT EVENTS — regulatory decisions, institutional deals, protocol launches, partnerships, industry moves. Time-sensitive news that affects the market immediately.
 
-DO NOT include: research reports, data analyses, opinion pieces, market outlooks, or "state of" articles.
+DO NOT include: research reports, data analyses, opinion pieces, market outlooks.
 
 Score each on impact (1-10):
 - Market-wide impact vs single project
@@ -234,14 +250,13 @@ def format_market_intelligence_block(items: list[dict]) -> str:
         lines.append(f"{item['rank']}. [{item['summary']}]({item['link']})")
     return "\n".join(lines) if lines else "No significant market news today."
 
-# ── SECTION 3: MEDIA COVERAGE ─────────────────────────────────────────────────
-def build_media_coverage_prompt(articles: list[dict], exclude_links: list[str]) -> str:
-    filtered = [a for a in articles if a["link"] not in exclude_links]
-    lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(filtered))
-    return f"""From these crypto news headlines, pick the TOP 3 most valuable RESEARCH & ANALYSIS pieces — reports, data releases, market analyses, research papers, opinion from credible institutions, "state of" industry reports.
+# ── SECTION 3: RESEARCH & REPORTS ────────────────────────────────────────────
+def build_research_prompt(articles: list[dict]) -> str:
+    lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
+    return f"""From these crypto research and analysis articles, pick the TOP 3 most valuable pieces — in-depth reports, data studies, market analyses, research papers, thought leadership from credible institutions (Messari, a16z, Chainalysis, Galaxy, Coinbase Institutional, etc).
 
-DO NOT include: breaking news, price updates, event announcements, or anything already covered as current events.
-ONLY include: in-depth analysis, research reports, data-driven insights, thought leadership from credible sources.
+ONLY include: research reports, data-driven analyses, industry studies, institutional perspectives.
+Skip: breaking news, price updates, basic event announcements.
 
 {lines}
 
@@ -250,7 +265,7 @@ RANK | Short title (max 10 words) | link
 
 Output lines only, no extra text."""
 
-def parse_media_coverage(raw: str) -> list[dict]:
+def parse_research(raw: str) -> list[dict]:
     items = []
     for line in raw.strip().split("\n"):
         line = line.strip()
@@ -265,35 +280,33 @@ def parse_media_coverage(raw: str) -> list[dict]:
             })
     return items
 
-def format_media_coverage_block(items: list[dict]) -> str:
+def format_research_block(items: list[dict]) -> str:
     lines = []
     for item in items:
         lines.append(f"{item['rank']}. [{item['title']}]({item['link']})")
-    return "\n".join(lines) if lines else "No notable reports today."
+    return "\n".join(lines) if lines else "No notable research today."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
 def build_digest() -> tuple[list[str], dict]:
     logger.info("Fetching X tweets…")
     all_tweets = fetch_all_competitor_tweets()
 
-    logger.info("Fetching RSS news…")
-    crypto_articles = fetch_crypto_news()
+    logger.info("Fetching news & research…")
+    news_articles     = fetch_news()
+    research_articles = fetch_research()
 
     logger.info("Calling Claude (3 calls)…")
     raw_outstanding  = call_claude(build_outstanding_posts_prompt(all_tweets), max_tokens=800)
-    raw_intelligence = call_claude(build_market_intelligence_prompt(crypto_articles), max_tokens=600)
+    raw_intelligence = call_claude(build_market_intelligence_prompt(news_articles), max_tokens=600)
+    raw_research     = call_claude(build_research_prompt(research_articles), max_tokens=400)
 
+    outstanding_items  = parse_outstanding_posts(raw_outstanding)
     intelligence_items = parse_market_intelligence(raw_intelligence)
-    exclude_links = [item["link"] for item in intelligence_items]
-
-    raw_media = call_claude(build_media_coverage_prompt(crypto_articles, exclude_links), max_tokens=400)
-
-    outstanding_items = parse_outstanding_posts(raw_outstanding)
-    media_items       = parse_media_coverage(raw_media)
+    research_items     = parse_research(raw_research)
 
     outstanding_block  = format_outstanding_block(outstanding_items)
     intelligence_block = format_market_intelligence_block(intelligence_items)
-    media_block        = format_media_coverage_block(media_items)
+    research_block     = format_research_block(research_items)
 
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
@@ -302,13 +315,13 @@ def build_digest() -> tuple[list[str], dict]:
     messages = [
         header + f"📢 *OUTSTANDING INDUSTRY POSTS*\n\n{outstanding_block}",
         f"📡 *MARKET INTELLIGENCE*\n\n{intelligence_block}",
-        f"📰 *MEDIA COVERAGE*\n\n{media_block}",
+        f"📊 *RESEARCH & REPORTS*\n\n{research_block}",
     ]
 
     sections = {
         "outstanding":  outstanding_items,
         "intelligence": intelligence_items,
-        "media":        media_items,
+        "research":     research_items,
     }
 
     return messages, sections
@@ -380,14 +393,14 @@ def build_lark_card(digest_sections: dict) -> dict:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": intel_lines}})
 
     elements.append({"tag": "hr"})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📰 **MEDIA COVERAGE**"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📊 **RESEARCH & REPORTS**"}})
     elements.append({"tag": "hr"})
-    media_lines = "\n".join(
+    research_lines = "\n".join(
         f"{item['rank']}. [{item['title']}]({item['link']})"
-        for item in digest_sections.get("media", [])
+        for item in digest_sections.get("research", [])
     )
-    if media_lines:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": media_lines}})
+    if research_lines:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": research_lines}})
 
     return {
         "msg_type": "interactive",
