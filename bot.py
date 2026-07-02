@@ -147,7 +147,7 @@ def fetch_news() -> list[dict]:
 def fetch_research() -> list[dict]:
     articles = []
     for url in RESEARCH_FEEDS:
-        articles.extend(fetch_feed(url, max_items=8, days=7))
+        articles.extend(fetch_feed(url, max_items=8, days=15))
     logger.info(f"Fetched {len(articles)} research articles")
     return articles[:30]
 
