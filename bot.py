@@ -35,6 +35,17 @@ COMPETITORS = {
     "OndoFinance":  "Ondo Finance",
 }
 
+# ── RESEARCH ACCOUNTS ─────────────────────────────────────────────────────────
+RESEARCH_ACCOUNTS = {
+    "galaxyhq":       "Galaxy",
+    "glxyresearch":   "Galaxy Research",
+    "MessariCrypto":  "Messari",
+    "a16zcrypto":     "a16z Crypto",
+    "coinbase":       "Coinbase",
+    "BinanceResearch":"Binance Research",
+    "chainalysis":    "Chainalysis",
+}
+
 # ── NEWS RSS FEEDS ────────────────────────────────────────────────────────────
 NEWS_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
@@ -43,18 +54,6 @@ NEWS_FEEDS = [
     "https://decrypt.co/feed",
     "https://bitcoinmagazine.com/.rss/full/",
     "https://www.dlnews.com/arc/outboundfeeds/rss/",
-]
-
-# ── RESEARCH RSS FEEDS ────────────────────────────────────────────────────────
-RESEARCH_FEEDS = [
-    "https://a16zcrypto.com/feed/",
-    "https://www.galaxy.com/insights/research/feed/",
-    "https://research.coinbase.com/feed",
-    "https://www.binance.com/research/rss",
-    "https://www.bcg.com/rss/articles?topic=blockchain",
-    "https://www.weforum.org/agenda/tag/blockchain/rss",
-    "https://www.imf.org/en/Blogs/rss",
-    "https://www.bis.org/rss/research.rss",
 ]
 
 NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins, Tokenization"
@@ -70,8 +69,8 @@ def get_x_user_id(username: str) -> str | None:
     logger.warning(f"X user not found: {username} — {resp.text[:100]}")
     return None
 
-def fetch_x_tweets(username: str, user_id: str, max_results: int = 10) -> list[dict]:
-    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def fetch_x_tweets(username: str, user_id: str, max_results: int = 10, hours: int = 24) -> list[dict]:
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
     url = f"https://api.twitter.com/2/users/{user_id}/tweets"
     params = {
         "max_results":  max_results,
@@ -92,7 +91,7 @@ def fetch_x_tweets(username: str, user_id: str, max_results: int = 10) -> list[d
         link = f"https://x.com/{username}/status/{tweet_id}"
         public_metrics = tweet.get("public_metrics", {})
         impressions = public_metrics.get("impression_count", 0)
-        tweets.append({"text": text[:280], "link": link, "impressions": impressions, "project": ""})
+        tweets.append({"text": text[:280], "link": link, "impressions": impressions})
     return tweets
 
 def fetch_all_competitor_tweets() -> list[dict]:
@@ -101,12 +100,26 @@ def fetch_all_competitor_tweets() -> list[dict]:
         user_id = get_x_user_id(username)
         if not user_id:
             continue
-        tweets = fetch_x_tweets(username, user_id, max_results=10)
+        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=24)
         for t in tweets:
             t["project"] = display_name
         all_tweets.extend(tweets)
         time.sleep(0.5)
-    logger.info(f"Fetched {len(all_tweets)} total competitor tweets")
+    logger.info(f"Fetched {len(all_tweets)} competitor tweets")
+    return all_tweets
+
+def fetch_research_tweets() -> list[dict]:
+    all_tweets = []
+    for username, display_name in RESEARCH_ACCOUNTS.items():
+        user_id = get_x_user_id(username)
+        if not user_id:
+            continue
+        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=720)  # 30 days
+        for t in tweets:
+            t["source"] = display_name
+        all_tweets.extend(tweets)
+        time.sleep(0.5)
+    logger.info(f"Fetched {len(all_tweets)} research tweets")
     return all_tweets
 
 def format_impressions(n: int) -> str:
@@ -146,13 +159,6 @@ def fetch_news() -> list[dict]:
         articles.extend(fetch_feed(url, max_items=5, days=1))
     logger.info(f"Fetched {len(articles)} news articles")
     return articles[:40]
-
-def fetch_research() -> list[dict]:
-    articles = []
-    for url in RESEARCH_FEEDS:
-        articles.extend(fetch_feed(url, max_items=8, days=100))
-    logger.info(f"Fetched {len(articles)} research articles")
-    return articles[:30]
 
 # ── SUPABASE ──────────────────────────────────────────────────────────────────
 SUPABASE_HEADERS = {
@@ -250,7 +256,7 @@ def format_outstanding_block(items: list[dict]) -> str:
     return "\n\n".join(lines) if lines else "No significant posts today."
 
 # ── SECTION 2: MEDIA COVERAGE ─────────────────────────────────────────────────
-def build_market_intelligence_prompt(articles: list[dict]) -> str:
+def build_media_coverage_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
     return f"""From these crypto news headlines, pick the TOP 5 most impactful CURRENT EVENTS — regulatory decisions, institutional deals, protocol launches, partnerships, industry moves. Time-sensitive news that affects the market immediately.
 
@@ -268,7 +274,7 @@ RANK | One sentence summary (max 10 words) | link
 
 Output lines only, no extra text."""
 
-def parse_market_intelligence(raw: str) -> list[dict]:
+def parse_media_coverage(raw: str) -> list[dict]:
     items = []
     for line in raw.strip().split("\n"):
         line = line.strip()
@@ -283,42 +289,44 @@ def parse_market_intelligence(raw: str) -> list[dict]:
             })
     return items
 
-def format_market_intelligence_block(items: list[dict]) -> str:
+def format_media_coverage_block(items: list[dict]) -> str:
     lines = []
     for item in items:
         lines.append(f"{item['rank']}. [{item['summary']}]({item['link']})")
     return "\n".join(lines) if lines else "No significant market news today."
 
 # ── SECTION 3: RESEARCH & REPORTS ────────────────────────────────────────────
-def build_research_prompt(articles: list[dict]) -> str:
-    lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
+def build_research_prompt(tweets: list[dict], sent_links: set[str]) -> str:
+    fresh = [t for t in tweets if t["link"] not in sent_links]
+    if not fresh:
+        return ""
+    lines = "\n".join(
+        f"{i}: [{t['source']}] {t['text'][:200]} | {t['link']}"
+        for i, t in enumerate(fresh)
+    )
     return f"""You are curating a weekly research briefing for C-level executives and institutional decision makers in crypto/blockchain.
 
-From these articles, pick the TOP 3 that are STRATEGIC RESEARCH REPORTS — macro-level, forward-looking insights relevant to business or investment decisions.
+From these tweets by research firms (Galaxy, Messari, a16z, Coinbase, Binance Research, Chainalysis), pick the TOP 3 that share or reference STRATEGIC RESEARCH REPORTS — macro-level insights relevant to business or investment decisions.
 
-ONLY accept:
-- State-of-industry reports (State of RWA, State of DeFi, crypto adoption reports)
-- Institutional/enterprise blockchain adoption analyses
-- Macro market structure and capital markets research
-- Regulatory framework outlook and policy analyses
-- Tokenization trends and projections
-- Research from: a16z, Galaxy Research, Coinbase Institutional, BCG, McKinsey, WEF, IMF, BIS, Binance Research
+ONLY accept tweets that:
+- Share a research report, analysis, or data study
+- Discuss macro market structure, institutional adoption, tokenization trends
+- Reference state-of-industry data or regulatory outlook
+- Contain a link to a full report or research piece
 
-STRICTLY REJECT (do not pick these even if nothing else is available):
-- Breaking news or current events (sanctions, hacks, price moves)
-- Project-specific announcements
-- Technical tutorials or developer content
-- Event recaps or conference coverage
-- Anything written for traders or developers rather than executives
-
-If fewer than 3 qualify, output only the ones that truly qualify. Better to output 1-2 real research pieces than 3 mediocre ones.
+STRICTLY REJECT:
+- Price commentary or market moves
+- Event announcements or conference promos
+- Generic opinion without data
+- Teaser tweets without substance
 
 Relevant narratives: {NARRATIVES}
 
+Tweets:
 {lines}
 
 Output ranked lines (1 to max 3):
-RANK | NARRATIVE | Short strategic title (max 10 words) | link
+RANK | SOURCE | NARRATIVE | Short strategic title (max 10 words) | link
 
 Output lines only, no extra text."""
 
@@ -329,61 +337,55 @@ def parse_research(raw: str) -> list[dict]:
         if not line:
             continue
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 4:
+        if len(parts) >= 5:
             items.append({
                 "rank":      parts[0],
-                "narrative": parts[1],
-                "title":     parts[2],
-                "link":      parts[3],
-            })
-        elif len(parts) == 3:
-            items.append({
-                "rank":      parts[0],
-                "narrative": "",
-                "title":     parts[1],
-                "link":      parts[2],
+                "source":    parts[1],
+                "narrative": parts[2],
+                "title":     parts[3],
+                "link":      parts[4],
             })
     return items
 
 def format_research_block(items: list[dict]) -> str:
     lines = []
     for item in items:
-        if item.get("narrative"):
-            lines.append(f"{item['rank']}. `{item['narrative']}` — [{item['title']}]({item['link']})")
-        else:
-            lines.append(f"{item['rank']}. [{item['title']}]({item['link']})")
-    return "\n".join(lines) if lines else "No notable research today."
+        lines.append(
+            f"{item['rank']}. *{item['source']}* `{item['narrative']}`\n"
+            f"[{item['title']}]({item['link']})"
+        )
+    return "\n\n".join(lines) if lines else "No notable research this week."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
 def build_digest() -> tuple[list[str], dict]:
-    logger.info("Fetching X tweets…")
-    all_tweets = fetch_all_competitor_tweets()
+    logger.info("Fetching competitor tweets…")
+    competitor_tweets = fetch_all_competitor_tweets()
 
-    logger.info("Fetching news & research…")
-    news_articles     = fetch_news()
-    research_articles = fetch_research()
+    logger.info("Fetching research tweets…")
+    research_tweets = fetch_research_tweets()
 
-    sent_links     = get_sent_research_links()
-    fresh_research = [a for a in research_articles if a["link"] not in sent_links]
-    logger.info(f"Fresh research articles after dedup: {len(fresh_research)}")
+    logger.info("Fetching news…")
+    news_articles = fetch_news()
 
     logger.info("Calling Claude (3 calls)…")
-    raw_outstanding  = call_claude(build_outstanding_posts_prompt(all_tweets), max_tokens=800)
-    raw_intelligence = call_claude(build_market_intelligence_prompt(news_articles), max_tokens=600)
+    raw_outstanding = call_claude(build_outstanding_posts_prompt(competitor_tweets), max_tokens=800)
+    raw_media       = call_claude(build_media_coverage_prompt(news_articles), max_tokens=600)
 
-    if fresh_research:
-        raw_research   = call_claude(build_research_prompt(fresh_research), max_tokens=400)
+    sent_links      = get_sent_research_links()
+    research_prompt = build_research_prompt(research_tweets, sent_links)
+    if research_prompt:
+        raw_research   = call_claude(research_prompt, max_tokens=500)
         research_items = parse_research(raw_research)
         save_sent_research_links([item["link"] for item in research_items])
     else:
         research_items = []
 
-    outstanding_items  = parse_outstanding_posts(raw_outstanding)
-    intelligence_items = parse_market_intelligence(raw_intelligence)
+    outstanding_items = parse_outstanding_posts(raw_outstanding)
+    media_items       = parse_media_coverage(raw_media)
 
-    outstanding_block  = format_outstanding_block(outstanding_items)
-    intelligence_block = format_market_intelligence_block(intelligence_items)
-    research_block     = format_research_block(research_items)
+    outstanding_block = format_outstanding_block(outstanding_items)
+    media_block       = format_media_coverage_block(media_items)
+    research_block    = format_research_block(research_items)
 
     vn_time  = datetime.now(timezone(timedelta(hours=7)))
     date_str = vn_time.strftime("%d/%m/%Y")
@@ -391,14 +393,14 @@ def build_digest() -> tuple[list[str], dict]:
 
     messages = [
         header + f"📢 *OUTSTANDING INDUSTRY POSTS*\n\n{outstanding_block}",
-        f"📡 *MEDIA COVERAGE*\n\n{intelligence_block}",
+        f"📡 *MEDIA COVERAGE*\n\n{media_block}",
         f"📊 *RESEARCH & REPORTS*\n\n{research_block}",
     ]
 
     sections = {
-        "outstanding":  outstanding_items,
-        "intelligence": intelligence_items,
-        "research":     research_items,
+        "outstanding": outstanding_items,
+        "media":       media_items,
+        "research":    research_items,
     }
 
     return messages, sections
@@ -462,24 +464,21 @@ def build_lark_card(digest_sections: dict) -> dict:
     elements.append({"tag": "hr"})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MEDIA COVERAGE**"}})
     elements.append({"tag": "hr"})
-    intel_lines = "\n".join(
+    media_lines = "\n".join(
         f"{item['rank']}. [{item['summary']}]({item['link']})"
-        for item in digest_sections.get("intelligence", [])
+        for item in digest_sections.get("media", [])
     )
-    if intel_lines:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": intel_lines}})
+    if media_lines:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": media_lines}})
 
     elements.append({"tag": "hr"})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📊 **RESEARCH & REPORTS**"}})
     elements.append({"tag": "hr"})
-    research_lines = "\n".join(
-        f"{item['rank']}. `{item.get('narrative', '')}` — [{item['title']}]({item['link']})"
-        if item.get("narrative") else
-        f"{item['rank']}. [{item['title']}]({item['link']})"
-        for item in digest_sections.get("research", [])
-    )
+    research_lines = []
+    for item in digest_sections.get("research", []):
+        research_lines.append(f"{item['rank']}. **{item['source']}** - {item['narrative']}\n[{item['title']}]({item['link']})")
     if research_lines:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": research_lines}})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n\n".join(research_lines)}})
 
     return {
         "msg_type": "interactive",
