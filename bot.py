@@ -253,7 +253,7 @@ def format_outstanding_block(items: list[dict]) -> str:
             f"{item['rank']}. *{item['project']}* `{item['narrative']}`\n"
             f"[{item['summary']}]({item['link']}) — {imp_str} views"
         )
-    return "\n\n".join(lines) if lines else "No significant posts today."
+    return "\n".join(lines) if lines else "No significant posts today."
 
 # ── SECTION 2: MEDIA COVERAGE ─────────────────────────────────────────────────
 def build_media_coverage_prompt(articles: list[dict]) -> str:
