@@ -114,7 +114,7 @@ def fetch_research_tweets() -> list[dict]:
         user_id = get_x_user_id(username)
         if not user_id:
             continue
-        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=720)  # 30 days
+        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=48) 
         for t in tweets:
             t["source"] = display_name
         all_tweets.extend(tweets)
