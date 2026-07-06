@@ -220,17 +220,31 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
 
 # ── SECTION 1: OUTSTANDING INDUSTRY POSTS ────────────────────────────────────
 def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
-    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:20]
+    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:30]
     lines = "\n".join(
         f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
         for i, t in enumerate(sorted_tweets)
     )
-    return f"""From these tweets (already sorted by impressions), pick the TOP 5. Skip price/hype/meme/teaser tweets — only include: product launches, partnerships, protocol upgrades, RWA, institutional moves, ecosystem news.
+    return f"""From these tweets, select the most valuable posts for crypto industry watchers.
+
+PRIORITY RULES (in order):
+1. MUST INCLUDE all tweets that are: H1/H2/quarterly reports, research publications, market analysis, trend commentary, data releases, industry insights — regardless of view count. If a competitor posted multiple report/research tweets in 24h, include ALL of them.
+2. Then fill remaining spots with: regulatory decisions, institutional deals, protocol launches, partnerships with high views.
+3. Views (impressions) is a tiebreaker between similar content types, not the primary filter.
+
+STRICTLY SKIP:
+- Corporate treasury moves (companies buying/selling BTC/ETH/any token)
+- Token purchase announcements
+- Price-driven news or commentary
+- Conference recaps or event promos
+- Meaningless teasers or memes
+
+There is no fixed limit of 5 — if multiple high-quality report/research posts exist, include them all. If only price noise exists, output fewer.
 
 Tweets:
 {lines}
 
-Output EXACTLY 5 lines ranked 1 to 5 by impressions:
+Output ranked lines:
 RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
