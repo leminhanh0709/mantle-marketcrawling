@@ -47,18 +47,7 @@ RESEARCH_ACCOUNTS = {
 }
 
 # ── NEWS RSS FEEDS ────────────────────────────────────────────────────────────
-# Tier 1: Mainstream financial/business media
-TIER1_FEEDS = [
-    "https://feeds.bloomberg.com/crypto/news.rss",
-    "https://feeds.reuters.com/reuters/businessNews",
-    "https://www.ft.com/technology?format=rss",
-    "https://feeds.wsj.com/wsj/xml/rss/3_7085.xml",
-    "https://fortune.com/feed/fortune-feeds/?id=3230629",
-    "https://www.forbes.com/crypto-blockchain/feed/",
-]
-
-# Tier 2: Crypto-native media
-TIER2_FEEDS = [
+NEWS_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
     "https://www.theblock.co/rss.xml",
@@ -66,9 +55,6 @@ TIER2_FEEDS = [
     "https://bitcoinmagazine.com/.rss/full/",
     "https://www.dlnews.com/arc/outboundfeeds/rss/",
 ]
-
-TIER1_NAMES = {"bloomberg.com", "reuters.com", "ft.com", "wsj.com", "fortune.com", "forbes.com"}
-TIER2_NAMES = {"coindesk.com", "cointelegraph.com", "theblock.co", "decrypt.co", "bitcoinmagazine.com", "dlnews.com"}
 
 NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins, Tokenization"
 
@@ -114,7 +100,7 @@ def fetch_all_competitor_tweets() -> list[dict]:
         user_id = get_x_user_id(username)
         if not user_id:
             continue
-        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=720)
+        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=24)
         for t in tweets:
             t["project"] = display_name
         all_tweets.extend(tweets)
@@ -167,24 +153,25 @@ def fetch_feed(url: str, max_items: int = 8, days: int = 1) -> list[dict]:
         logger.warning(f"Failed {url}: {e}")
         return []
 
+OUTLET_MAP = {
+    "coindesk.com":       "CoinDesk",
+    "cointelegraph.com":  "CoinTelegraph",
+    "theblock.co":        "The Block",
+    "decrypt.co":         "Decrypt",
+    "bitcoinmagazine.com":"Bitcoin Magazine",
+    "dlnews.com":         "DL News",
+}
+
 def fetch_news() -> list[dict]:
     articles = []
-    for url in TIER1_FEEDS:
+    for url in NEWS_FEEDS:
+        outlet = next((name for domain, name in OUTLET_MAP.items() if domain in url), "Media")
         items = fetch_feed(url, max_items=5, days=1)
         for item in items:
-            item["tier"] = 1
-            item["outlet"] = next((n for n in TIER1_NAMES if n in url), "Major Media")
+            item["outlet"] = outlet
         articles.extend(items)
-    for url in TIER2_FEEDS:
-        items = fetch_feed(url, max_items=5, days=1)
-        for item in items:
-            item["tier"] = 2
-            item["outlet"] = next((n for n in TIER2_NAMES if n in url), "Crypto Media")
-        articles.extend(items)
-    # Sort tier1 first
-    articles.sort(key=lambda x: x.get("tier", 2))
     logger.info(f"Fetched {len(articles)} news articles")
-    return articles[:50]
+    return articles[:40]
 
 # ── SUPABASE ──────────────────────────────────────────────────────────────────
 SUPABASE_HEADERS = {
@@ -238,24 +225,12 @@ def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
         f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
         for i, t in enumerate(sorted_tweets)
     )
-    return f"""From these tweets, pick the TOP 5 most valuable posts for crypto industry watchers.
-
-Ranking logic:
-- Views (impressions) is the primary factor
-- BUT boost these content types even if views are slightly lower:
-  * H1/H2/quarterly market reports or data releases
-  * Insightful market analysis or trend commentary
-  * Creative or thought-leadership posts with substance
-  * Major milestones with industry significance
-- SKIP: pure price talk, token pumps, spam, meaningless teasers
-
-If a H1 report has 50K views and a price tweet has 80K views, pick the H1 report.
-If two posts are similar quality, higher views wins.
+    return f"""From these tweets (already sorted by impressions), pick the TOP 5. Skip price/hype/meme/teaser tweets — only include: product launches, partnerships, protocol upgrades, RWA, institutional moves, ecosystem news.
 
 Tweets:
 {lines}
 
-Output EXACTLY 5 lines ranked 1 to 5:
+Output EXACTLY 5 lines ranked 1 to 5 by impressions:
 RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
@@ -295,33 +270,24 @@ def format_outstanding_block(items: list[dict]) -> str:
 
 # ── SECTION 2: MEDIA COVERAGE ─────────────────────────────────────────────────
 def build_media_coverage_prompt(articles: list[dict]) -> str:
-    lines = "\n".join(
-        f"{i}: [{'⭐ ' if a.get('tier')==1 else ''}{a.get('outlet','Media')}] {a['title']} | {a['link']}"
-        for i, a in enumerate(articles)
-    )
-    return f"""You are a crypto market analyst identifying the most impactful narratives being covered by major media today.
+    lines = "\n".join(f"{i}: {a['title']} | {a.get('outlet', 'Media')} | {a['link']}" for i, a in enumerate(articles))
+    return f"""You are a crypto market analyst identifying impactful narratives being covered by media today.
 
-Goal: Show which industry narratives and market trends are being pushed by big media — not just list news, but reveal WHAT THE MARKET IS TALKING ABOUT.
-
-PRIORITY: Prefer Tier 1 outlets (⭐ Bloomberg, Reuters, FT, WSJ, Fortune, Forbes). Only use Tier 2 (CoinDesk, The Block) if the story represents a genuinely significant narrative shift.
+Goal: Show which narratives and market trends are being pushed by media — reveal WHAT THE MARKET IS TALKING ABOUT.
 
 SELECT stories that:
-- Signal a major narrative or trend gaining momentum (RWA, tokenization, institutional adoption, regulation, DeFi, stablecoins)
+- Signal a major narrative gaining momentum (RWA, tokenization, institutional adoption, regulation, DeFi, stablecoins)
 - Have potential to move market sentiment or industry direction
-- Represent mainstream financial world paying attention to crypto
+- Represent mainstream or crypto-native media paying attention to a broader trend
 
-SKIP:
-- Project-specific minor updates
-- Price movements or liquidations
-- Conference recaps or event promos
-- Anything that doesn't signal a broader trend
+DO NOT include: corporate treasury moves (companies buying/selling BTC/ETH/any token), token purchase announcements, price-driven news, conference recaps, event promos.
 
-If fewer than 3 stories qualify, output only those that do. Quality over quantity.
+If fewer than 3 stories qualify, output only those that do. Quality over quantity. Max 5.
 
 {lines}
 
-Output ranked lines (max 5, min 1):
-RANK | OUTLET | NARRATIVE | One sentence summary showing market impact (max 12 words) | link
+Output ranked lines:
+RANK | OUTLET NAME | NARRATIVE | One sentence summary showing market impact (max 12 words) | link
 
 Narratives: {NARRATIVES}
 Output lines only, no extra text."""
@@ -349,12 +315,20 @@ def parse_media_coverage(raw: str) -> list[dict]:
                 "summary":   parts[2],
                 "link":      parts[3],
             })
+        elif len(parts) == 3:
+            items.append({
+                "rank":      parts[0],
+                "outlet":    "",
+                "narrative": "",
+                "summary":   parts[1],
+                "link":      parts[2],
+            })
     return items
 
 def format_media_coverage_block(items: list[dict]) -> str:
     lines = []
     for item in items:
-        outlet = item.get("outlet", "")
+        outlet    = item.get("outlet", "")
         narrative = item.get("narrative", "")
         if outlet and narrative:
             lines.append(f"{item['rank']}. *{outlet}* `{narrative}` — [{item['summary']}]({item['link']})")
@@ -542,10 +516,6 @@ def build_lark_card(digest_sections: dict) -> dict:
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MEDIA COVERAGE**"}})
     elements.append({"tag": "hr"})
     media_lines = "\n".join(
-        f"{item['rank']}. **{item['outlet']}** `{item['narrative']}` — [{item['summary']}]({item['link']})"
-        if item.get("outlet") and item.get("narrative") else
-        f"{item['rank']}. **{item['outlet']}** — [{item['summary']}]({item['link']})"
-        if item.get("outlet") else
         f"{item['rank']}. [{item['summary']}]({item['link']})"
         for item in digest_sections.get("media", [])
     )
@@ -593,9 +563,9 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        # lark_card = build_lark_card(sections)
-        # send_lark(lark_card)
-        logger.info("Digest sent to Telegram (3 messages)")
+        lark_card = build_lark_card(sections)
+        send_lark(lark_card)
+        logger.info("Digest sent to Telegram and Lark")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram_message(f"⚠️ Bot error: {e}")
