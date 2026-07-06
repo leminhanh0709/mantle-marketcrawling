@@ -238,21 +238,24 @@ def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
         f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
         for i, t in enumerate(sorted_tweets)
     )
-    return f"""From these tweets (already sorted by impressions), pick the TOP 5. Views is the primary ranking factor.
+    return f"""From these tweets, pick the TOP 5 most valuable posts for crypto industry watchers.
 
-Include any of these content types:
-- Product launches, partnerships, protocol upgrades
-- RWA, institutional moves, ecosystem news
-- Market-driven insights, trend analysis, H1/H2 reports
-- Creative or thought-leadership posts with high engagement
-- Data releases or notable milestones
+Ranking logic:
+- Views (impressions) is the primary factor
+- BUT boost these content types even if views are slightly lower:
+  * H1/H2/quarterly market reports or data releases
+  * Insightful market analysis or trend commentary
+  * Creative or thought-leadership posts with substance
+  * Major milestones with industry significance
+- SKIP: pure price talk, token pumps, spam, meaningless teasers
 
-Skip ONLY: pure price talk, spam, or completely meaningless content.
+If a H1 report has 50K views and a price tweet has 80K views, pick the H1 report.
+If two posts are similar quality, higher views wins.
 
 Tweets:
 {lines}
 
-Output EXACTLY 5 lines ranked 1 to 5 by impressions:
+Output EXACTLY 5 lines ranked 1 to 5:
 RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
@@ -296,23 +299,31 @@ def build_media_coverage_prompt(articles: list[dict]) -> str:
         f"{i}: [{'⭐ ' if a.get('tier')==1 else ''}{a.get('outlet','Media')}] {a['title']} | {a['link']}"
         for i, a in enumerate(articles)
     )
-    return f"""You are selecting media coverage for C-level executives. Goal: identify which major media outlets are actively covering crypto/blockchain today, and what they're saying.
+    return f"""You are a crypto market analyst identifying the most impactful narratives being covered by major media today.
 
-PRIORITY: Prefer Tier 1 outlets (⭐ Bloomberg, Reuters, FT, WSJ, Fortune, Forbes) over crypto-native media.
-Only include Tier 2 (CoinDesk, The Block, etc.) if the story has genuinely wide market impact.
+Goal: Show which industry narratives and market trends are being pushed by big media — not just list news, but reveal WHAT THE MARKET IS TALKING ABOUT.
 
-RULES:
-- Show outlet name clearly
-- Only pick stories with broad market relevance (institutional, regulatory, macro)
-- Skip: project-specific news, price moves, technical tutorials
-- If fewer than 3 stories qualify today, output only those that do. Do NOT pad with weak stories.
-- Max 5, min 1
+PRIORITY: Prefer Tier 1 outlets (⭐ Bloomberg, Reuters, FT, WSJ, Fortune, Forbes). Only use Tier 2 (CoinDesk, The Block) if the story represents a genuinely significant narrative shift.
+
+SELECT stories that:
+- Signal a major narrative or trend gaining momentum (RWA, tokenization, institutional adoption, regulation, DeFi, stablecoins)
+- Have potential to move market sentiment or industry direction
+- Represent mainstream financial world paying attention to crypto
+
+SKIP:
+- Project-specific minor updates
+- Price movements or liquidations
+- Conference recaps or event promos
+- Anything that doesn't signal a broader trend
+
+If fewer than 3 stories qualify, output only those that do. Quality over quantity.
 
 {lines}
 
-Output ranked lines:
-RANK | OUTLET NAME | One sentence summary (max 10 words) | link
+Output ranked lines (max 5, min 1):
+RANK | OUTLET | NARRATIVE | One sentence summary showing market impact (max 12 words) | link
 
+Narratives: {NARRATIVES}
 Output lines only, no extra text."""
 
 def parse_media_coverage(raw: str) -> list[dict]:
@@ -322,27 +333,33 @@ def parse_media_coverage(raw: str) -> list[dict]:
         if not line:
             continue
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 4:
+        if len(parts) >= 5:
             items.append({
-                "rank":    parts[0],
-                "outlet":  parts[1],
-                "summary": parts[2],
-                "link":    parts[3],
+                "rank":      parts[0],
+                "outlet":    parts[1],
+                "narrative": parts[2],
+                "summary":   parts[3],
+                "link":      parts[4],
             })
-        elif len(parts) == 3:
+        elif len(parts) == 4:
             items.append({
-                "rank":    parts[0],
-                "outlet":  "",
-                "summary": parts[1],
-                "link":    parts[2],
+                "rank":      parts[0],
+                "outlet":    parts[1],
+                "narrative": "",
+                "summary":   parts[2],
+                "link":      parts[3],
             })
     return items
 
 def format_media_coverage_block(items: list[dict]) -> str:
     lines = []
     for item in items:
-        if item.get("outlet"):
-            lines.append(f"{item['rank']}. *{item['outlet']}* — [{item['summary']}]({item['link']})")
+        outlet = item.get("outlet", "")
+        narrative = item.get("narrative", "")
+        if outlet and narrative:
+            lines.append(f"{item['rank']}. *{outlet}* `{narrative}` — [{item['summary']}]({item['link']})")
+        elif outlet:
+            lines.append(f"{item['rank']}. *{outlet}* — [{item['summary']}]({item['link']})")
         else:
             lines.append(f"{item['rank']}. [{item['summary']}]({item['link']})")
     return "\n".join(lines) if lines else "No major media coverage today."
@@ -525,6 +542,8 @@ def build_lark_card(digest_sections: dict) -> dict:
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MEDIA COVERAGE**"}})
     elements.append({"tag": "hr"})
     media_lines = "\n".join(
+        f"{item['rank']}. **{item['outlet']}** `{item['narrative']}` — [{item['summary']}]({item['link']})"
+        if item.get("outlet") and item.get("narrative") else
         f"{item['rank']}. **{item['outlet']}** — [{item['summary']}]({item['link']})"
         if item.get("outlet") else
         f"{item['rank']}. [{item['summary']}]({item['link']})"
