@@ -100,7 +100,7 @@ def fetch_all_competitor_tweets() -> list[dict]:
         user_id = get_x_user_id(username)
         if not user_id:
             continue
-        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=24)
+        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=720)
         for t in tweets:
             t["project"] = display_name
         all_tweets.extend(tweets)
@@ -220,31 +220,17 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
 
 # ── SECTION 1: OUTSTANDING INDUSTRY POSTS ────────────────────────────────────
 def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
-    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:30]
+    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:20]
     lines = "\n".join(
         f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
         for i, t in enumerate(sorted_tweets)
     )
-    return f"""From these tweets (last 24h), select the best 1 post per chain/project.
-
-SELECTION RULE per chain — pick in this order:
-1. Report/research/market analysis/trend commentary/data release (even if low views)
-2. Regulatory decision, institutional deal, protocol launch, partnership (high views preferred)
-3. Skip if only price news, treasury moves, token buying, conference recaps, memes available
-
-HARD LIMIT: Exactly 1 post per chain. If a chain has multiple good posts, pick the single best one (prioritize report/research type).
-
-STRICTLY SKIP for all chains:
-- Corporate treasury moves (companies buying/selling BTC/ETH/any token)
-- Token purchase announcements
-- Price-driven news or commentary
-- Conference recaps or event promos
-- Meaningless teasers or memes
+    return f"""From these tweets (already sorted by impressions), pick the TOP 5. Skip price/hype/meme/teaser tweets — only include: product launches, partnerships, protocol upgrades, RWA, institutional moves, ecosystem news.
 
 Tweets:
 {lines}
 
-Output one line per chain (skip chain if nothing qualifies):
+Output EXACTLY 5 lines ranked 1 to 5 by impressions:
 RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
@@ -284,27 +270,22 @@ def format_outstanding_block(items: list[dict]) -> str:
 
 # ── SECTION 2: MEDIA COVERAGE ─────────────────────────────────────────────────
 def build_media_coverage_prompt(articles: list[dict]) -> str:
-    lines = "\n".join(f"{i}: {a['title']} | {a.get('outlet', 'Media')} | {a['link']}" for i, a in enumerate(articles))
-    return f"""You are a crypto market analyst identifying impactful narratives being covered by media today.
+    lines = "\n".join(f"{i}: [{a.get('outlet','Media')}] {a['title']} | {a['link']}" for i, a in enumerate(articles))
+    return f"""From these crypto news headlines, pick the TOP 5 most impactful CURRENT EVENTS — regulatory decisions, institutional deals, protocol launches, partnerships, industry moves. Time-sensitive news that affects the market immediately.
 
-Goal: Show which narratives and market trends are being pushed by media — reveal WHAT THE MARKET IS TALKING ABOUT.
+DO NOT include: research reports, data analyses, opinion pieces, market outlooks.
 
-SELECT stories that:
-- Signal a major narrative gaining momentum (RWA, tokenization, institutional adoption, regulation, DeFi, stablecoins)
-- Have potential to move market sentiment or industry direction
-- Represent mainstream or crypto-native media paying attention to a broader trend
-
-DO NOT include: corporate treasury moves (companies buying/selling BTC/ETH/any token), token purchase announcements, price-driven news, conference recaps, event promos.
-
-If fewer than 3 stories qualify, output only those that do. Quality over quantity. Max 5.
+Rank by impact:
+- Market-wide impact vs single project
+- Credibility and novelty
+- Actionable/immediate significance
 
 {lines}
 
-Output ranked lines:
-RANK | OUTLET NAME | NARRATIVE | One sentence summary showing market impact (max 12 words) | link
+Output EXACTLY 5 lines ranked 1 to 5:
+RANK | OUTLET NAME | One sentence summary (max 10 words) | link
 
-Narratives: {NARRATIVES}
-Output lines only, no extra text."""
+Do NOT include scores or numbers other than the rank. Output lines only, no extra text."""
 
 def parse_media_coverage(raw: str) -> list[dict]:
     items = []
@@ -313,44 +294,30 @@ def parse_media_coverage(raw: str) -> list[dict]:
         if not line:
             continue
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 5:
+        if len(parts) >= 4:
             items.append({
-                "rank":      parts[0],
-                "outlet":    parts[1],
-                "narrative": parts[2],
-                "summary":   parts[3],
-                "link":      parts[4],
-            })
-        elif len(parts) == 4:
-            items.append({
-                "rank":      parts[0],
-                "outlet":    parts[1],
-                "narrative": "",
-                "summary":   parts[2],
-                "link":      parts[3],
+                "rank":    parts[0],
+                "outlet":  parts[1],
+                "summary": parts[2],
+                "link":    parts[3],
             })
         elif len(parts) == 3:
             items.append({
-                "rank":      parts[0],
-                "outlet":    "",
-                "narrative": "",
-                "summary":   parts[1],
-                "link":      parts[2],
+                "rank":    parts[0],
+                "outlet":  "",
+                "summary": parts[1],
+                "link":    parts[2],
             })
     return items
 
 def format_media_coverage_block(items: list[dict]) -> str:
     lines = []
     for item in items:
-        outlet    = item.get("outlet", "")
-        narrative = item.get("narrative", "")
-        if outlet and narrative:
-            lines.append(f"{item['rank']}. *{outlet}* `{narrative}` — [{item['summary']}]({item['link']})")
-        elif outlet:
-            lines.append(f"{item['rank']}. *{outlet}* — [{item['summary']}]({item['link']})")
+        if item.get("outlet"):
+            lines.append(f"{item['rank']}. *{item['outlet']}* — [{item['summary']}]({item['link']})")
         else:
             lines.append(f"{item['rank']}. [{item['summary']}]({item['link']})")
-    return "\n".join(lines) if lines else "No major media coverage today."
+    return "\n".join(lines) if lines else "No significant market news today."
 
 # ── SECTION 3: RESEARCH & REPORTS ────────────────────────────────────────────
 def build_research_prompt(tweets: list[dict], sent_links: set[str]) -> str:
