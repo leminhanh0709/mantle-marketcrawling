@@ -56,43 +56,7 @@ NEWS_FEEDS = [
     "https://www.dlnews.com/arc/outboundfeeds/rss/",
 ]
 
-OUTLET_MAP = {
-    "coindesk.com":       "CoinDesk",
-    "cointelegraph.com":  "CoinTelegraph",
-    "theblock.co":        "The Block",
-    "decrypt.co":         "Decrypt",
-    "bitcoinmagazine.com":"Bitcoin Magazine",
-    "dlnews.com":         "DL News",
-}
-
 NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins, Tokenization"
-
-# ── MANTLE KEYWORDS ───────────────────────────────────────────────────────────
-MANTLE_KEYWORDS = [
-    "mantle", "$mnt", "mantle network", "mantle l2",
-    "mantle rwa", "mnt token", "mantle tvl",
-]
-
-# ── CONTENT SCORING ───────────────────────────────────────────────────────────
-REPORT_KEYWORDS = [
-    "report", "research", "data", "analysis", "insights", "study",
-    "survey", "h1", "h2", "q1", "q2", "q3", "q4", "quarterly", "annual",
-    "state of", "findings", "outlook", "forecast", "trends"
-]
-
-NARRATIVE_KEYWORDS = [
-    "rwa", "tokenization", "tokenized", "defi", "infrastructure",
-    "ai", "stablecoin", "institutional", "regulation", "partnership",
-    "launch", "protocol", "mainnet", "upgrade"
-]
-
-def content_score(tweet: dict) -> int:
-    text = tweet.get("text", "").lower()
-    if any(kw in text for kw in REPORT_KEYWORDS):
-        return 2
-    if any(kw in text for kw in NARRATIVE_KEYWORDS):
-        return 1
-    return 0
 
 # ── X API ─────────────────────────────────────────────────────────────────────
 X_HEADERS = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
@@ -136,7 +100,7 @@ def fetch_all_competitor_tweets() -> list[dict]:
         user_id = get_x_user_id(username)
         if not user_id:
             continue
-        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=24)
+        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=720)
         for t in tweets:
             t["project"] = display_name
         all_tweets.extend(tweets)
@@ -150,7 +114,7 @@ def fetch_research_tweets() -> list[dict]:
         user_id = get_x_user_id(username)
         if not user_id:
             continue
-        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=48)
+        tweets = fetch_x_tweets(username, user_id, max_results=10, hours=48) 
         for t in tweets:
             t["source"] = display_name
         all_tweets.extend(tweets)
@@ -181,9 +145,8 @@ def fetch_feed(url: str, max_items: int = 8, days: int = 1) -> list[dict]:
             if published and published < cutoff:
                 continue
             items.append({
-                "title":   getattr(entry, "title", "").strip(),
-                "link":    getattr(entry, "link", "").strip(),
-                "summary": getattr(entry, "summary", "")[:300].strip(),
+                "title": getattr(entry, "title", "").strip(),
+                "link":  getattr(entry, "link", "").strip(),
             })
         return items
     except Exception as e:
@@ -193,32 +156,9 @@ def fetch_feed(url: str, max_items: int = 8, days: int = 1) -> list[dict]:
 def fetch_news() -> list[dict]:
     articles = []
     for url in NEWS_FEEDS:
-        outlet = next((name for domain, name in OUTLET_MAP.items() if domain in url), "Media")
-        items = fetch_feed(url, max_items=5, days=1)
-        for item in items:
-            item["outlet"] = outlet
-        articles.extend(items)
+        articles.extend(fetch_feed(url, max_items=5, days=1))
     logger.info(f"Fetched {len(articles)} news articles")
     return articles[:40]
-
-# ── MANTLE ALERT ──────────────────────────────────────────────────────────────
-def detect_mantle_mentions(articles: list[dict]) -> list[dict]:
-    mentions = []
-    for a in articles:
-        text = (a.get("title", "") + " " + a.get("summary", "")).lower()
-        if any(kw in text for kw in MANTLE_KEYWORDS):
-            mentions.append(a)
-    return mentions
-
-def format_mantle_alert(mentions: list[dict]) -> str | None:
-    if not mentions:
-        return None
-    vn_time  = datetime.now(timezone(timedelta(hours=7)))
-    date_str = vn_time.strftime("%d/%m/%Y")
-    lines = [f"🚨 *MANTLE MENTION ALERT* — {date_str}\n{'─' * 28}\n"]
-    for i, a in enumerate(mentions, 1):
-        lines.append(f"{i}. {a['title']}\n{a['link']}")
-    return "\n\n".join(lines)
 
 # ── SUPABASE ──────────────────────────────────────────────────────────────────
 SUPABASE_HEADERS = {
@@ -267,28 +207,17 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
 
 # ── SECTION 1: OUTSTANDING INDUSTRY POSTS ────────────────────────────────────
 def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
-    sorted_tweets = sorted(
-        all_tweets,
-        key=lambda t: (content_score(t), t.get("impressions", 0)),
-        reverse=True
-    )[:20]
+    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:20]
     lines = "\n".join(
         f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
         for i, t in enumerate(sorted_tweets)
     )
-    return f"""From these tweets (last 24h), pick the best 1 post per chain/project.
-
-PRIORITY ORDER per chain:
-1. Reports, research, market insights, data releases, trend analysis — pick these first regardless of view count
-2. Narratives: RWA, AI, Infrastructure, Institutional, Tokenization — pick by views
-3. Other product/ecosystem news — pick by views
-
-STRICTLY SKIP: price news, token price moves, buying/selling token announcements, corporate treasury moves, conference recaps, memes.
+    return f"""From these tweets (already sorted by impressions), pick the TOP 5. Skip price/hype/meme/teaser tweets — only include: product launches, partnerships, protocol upgrades, RWA, institutional moves, ecosystem news.
 
 Tweets:
 {lines}
 
-Output one line per chain (skip chain if nothing qualifies), max 1 per project:
+Output EXACTLY 5 lines ranked 1 to 5 by impressions:
 RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
@@ -310,15 +239,7 @@ def parse_outstanding_posts(raw: str) -> list[dict]:
                 "link":        parts[4],
                 "impressions": parts[5] if len(parts) > 5 else "0",
             })
-    # Enforce max 1 post per chain at code level
-    seen = set()
-    deduped = []
-    for item in items:
-        p = item["project"].strip()
-        if p not in seen:
-            seen.add(p)
-            deduped.append(item)
-    return deduped
+    return items
 
 def format_outstanding_block(items: list[dict]) -> str:
     lines = []
@@ -336,25 +257,22 @@ def format_outstanding_block(items: list[dict]) -> str:
 
 # ── SECTION 2: MEDIA COVERAGE ─────────────────────────────────────────────────
 def build_media_coverage_prompt(articles: list[dict]) -> str:
-    lines = "\n".join(
-        f"{i}: [{a.get('outlet','Media')}] {a['title']} | {a['link']}"
-        for i, a in enumerate(articles)
-    )
-    return f"""From these crypto news headlines, pick the TOP 5 most valuable stories.
+    lines = "\n".join(f"{i}: {a['title']} | {a['link']}" for i, a in enumerate(articles))
+    return f"""From these crypto news headlines, pick the TOP 5 most impactful CURRENT EVENTS — regulatory decisions, institutional deals, protocol launches, partnerships, industry moves. Time-sensitive news that affects the market immediately.
 
-PRIORITY ORDER:
-1. Reports, research, market insights, data releases, trend analysis — pick these first
-2. Narratives: RWA, AI, Infrastructure, Institutional, Tokenization
-3. Other regulatory or industry-wide news
+DO NOT include: research reports, data analyses, opinion pieces, market outlooks.
 
-SKIP: price news, token price moves, buying/selling token announcements, corporate treasury moves (e.g. companies buying BTC/ETH), conference recaps.
+Rank by impact:
+- Market-wide impact vs single project
+- Credibility and novelty
+- Actionable/immediate significance
 
 {lines}
 
 Output EXACTLY 5 lines ranked 1 to 5:
-RANK | OUTLET | One sentence summary (max 10 words) | link
+RANK | One sentence summary (max 10 words) | link
 
-Output lines only, no extra text."""
+Do NOT include scores or numbers other than the rank. Output lines only, no extra text."""
 
 def parse_media_coverage(raw: str) -> list[dict]:
     items = []
@@ -363,17 +281,9 @@ def parse_media_coverage(raw: str) -> list[dict]:
         if not line:
             continue
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 4:
+        if len(parts) >= 3:
             items.append({
                 "rank":    parts[0],
-                "outlet":  parts[1],
-                "summary": parts[2],
-                "link":    parts[3],
-            })
-        elif len(parts) == 3:
-            items.append({
-                "rank":    parts[0],
-                "outlet":  "",
                 "summary": parts[1],
                 "link":    parts[2],
             })
@@ -382,10 +292,7 @@ def parse_media_coverage(raw: str) -> list[dict]:
 def format_media_coverage_block(items: list[dict]) -> str:
     lines = []
     for item in items:
-        if item.get("outlet"):
-            lines.append(f"{item['rank']}. *{item['outlet']}* — [{item['summary']}]({item['link']})")
-        else:
-            lines.append(f"{item['rank']}. [{item['summary']}]({item['link']})")
+        lines.append(f"{item['rank']}. [{item['summary']}]({item['link']})")
     return "\n".join(lines) if lines else "No significant market news today."
 
 # ── SECTION 3: RESEARCH & REPORTS ────────────────────────────────────────────
@@ -405,6 +312,7 @@ ONLY accept tweets that:
 - Share a research report, analysis, or data study
 - Discuss macro market structure, institutional adoption, tokenization trends
 - Reference state-of-industry data or regulatory outlook
+- Contain a link to a full report or research piece
 
 STRICTLY REJECT:
 - Price commentary or market moves
@@ -565,8 +473,6 @@ def build_lark_card(digest_sections: dict) -> dict:
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MEDIA COVERAGE**"}})
     elements.append({"tag": "hr"})
     media_lines = "\n".join(
-        f"{item['rank']}. **{item['outlet']}** — [{item['summary']}]({item['link']})"
-        if item.get("outlet") else
         f"{item['rank']}. [{item['summary']}]({item['link']})"
         for item in digest_sections.get("media", [])
     )
@@ -614,20 +520,9 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        # Lark disabled for testing
-        # lark_card = build_lark_card(sections)
-        # send_lark(lark_card)
-        logger.info("Digest sent to Telegram")
-
-        # ── MANTLE ALERT ──
-        news_articles = fetch_news()
-        mantle_mentions = detect_mantle_mentions(news_articles)
-        alert = format_mantle_alert(mantle_mentions)
-        if alert:
-            send_telegram_message(alert)
-            logger.info(f"Mantle alert sent: {len(mantle_mentions)} mentions")
-        else:
-            logger.info("No Mantle mentions today")
+        lark_card = build_lark_card(sections)
+        send_lark(lark_card)
+        logger.info("Digest sent to Telegram and Lark")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram_message(f"⚠️ Bot error: {e}")
