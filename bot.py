@@ -529,10 +529,17 @@ def build_lark_card(digest_sections: dict) -> dict:
     elements.append({"tag": "hr"})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📡 **MEDIA COVERAGE**"}})
     elements.append({"tag": "hr"})
-    media_lines = "\n".join(
-        f"{item['rank']}. [{item['summary']}]({item['link']})"
-        for item in digest_sections.get("media", [])
-    )
+    media_lines_list = []
+    for item in digest_sections.get("media", []):
+        outlet    = item.get("outlet", "")
+        narrative = item.get("narrative", "")
+        if outlet and narrative:
+            media_lines_list.append(f"{item['rank']}. **{outlet}** - {narrative}\n[{item['summary']}]({item['link']})")
+        elif outlet:
+            media_lines_list.append(f"{item['rank']}. **{outlet}**\n[{item['summary']}]({item['link']})")
+        else:
+            media_lines_list.append(f"{item['rank']}. [{item['summary']}]({item['link']})")
+    media_lines = "\n".join(media_lines_list)
     if media_lines:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": media_lines}})
 
@@ -577,8 +584,8 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        # lark_card = build_lark_card(sections)
-        # send_lark(lark_card)
+        lark_card = build_lark_card(sections)
+        send_lark(lark_card)
         logger.info("Digest sent to Telegram and Lark")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
