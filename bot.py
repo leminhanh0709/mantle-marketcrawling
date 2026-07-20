@@ -62,6 +62,30 @@ NEWS_FEEDS = [
 
 NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins, Tokenization"
 
+# ── MANTLE KEYWORDS ───────────────────────────────────────────────────────────
+MANTLE_KEYWORDS = [
+    "mantle", "$mnt", "mantle network", "mantle l2",
+    "mantle rwa", "mnt token", "mantle tvl",
+]
+
+def detect_mantle_mentions(articles: list[dict]) -> list[dict]:
+    mentions = []
+    for a in articles:
+        text = (a.get("title", "") + " " + a.get("summary", "")).lower()
+        if any(kw in text for kw in MANTLE_KEYWORDS):
+            mentions.append(a)
+    return mentions
+
+def format_mantle_alert(mentions: list[dict]) -> str | None:
+    if not mentions:
+        return None
+    vn_time  = datetime.now(timezone(timedelta(hours=7)))
+    date_str = vn_time.strftime("%d/%m/%Y")
+    lines = [f"🚨 *MANTLE MENTION ALERT* — {date_str}\n{'─' * 28}\n"]
+    for i, a in enumerate(mentions, 1):
+        lines.append(f"{i}. {a['title']}\n{a['link']}")
+    return "\n\n".join(lines)
+
 # ── X API ─────────────────────────────────────────────────────────────────────
 X_HEADERS = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
 
@@ -149,8 +173,9 @@ def fetch_feed(url: str, max_items: int = 8, days: int = 1) -> list[dict]:
             if published and published < cutoff:
                 continue
             items.append({
-                "title": getattr(entry, "title", "").strip(),
-                "link":  getattr(entry, "link", "").strip(),
+                "title":   getattr(entry, "title", "").strip(),
+                "link":    getattr(entry, "link", "").strip(),
+                "summary": getattr(entry, "summary", "")[:300].strip(),
             })
         return items
     except Exception as e:
@@ -464,7 +489,7 @@ def format_research_block(items: list[dict]) -> str:
     return "\n".join(lines) if lines else "No notable research this week."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
-def build_digest() -> tuple[list[str], dict]:
+def build_digest() -> tuple[list[str], dict, list[dict]]:
     logger.info("Fetching competitor tweets…")
     competitor_tweets = fetch_all_competitor_tweets()
 
@@ -510,7 +535,7 @@ def build_digest() -> tuple[list[str], dict]:
         "research":    research_items,
     }
 
-    return messages, sections
+    return messages, sections, news_articles
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
 def send_telegram_message(text: str) -> bool:
@@ -632,11 +657,20 @@ def send_lark(card: dict) -> bool:
 def run_job():
     logger.info("Running digest…")
     try:
-        messages, sections = build_digest()
+        messages, sections, news_articles = build_digest()
         send_telegram_messages(messages)
         # lark_card = build_lark_card(sections)
         # send_lark(lark_card)
         logger.info("Digest sent to Telegram")
+
+        # ── MANTLE ALERT ──
+        mantle_mentions = detect_mantle_mentions(news_articles)
+        alert = format_mantle_alert(mantle_mentions)
+        if alert:
+            send_telegram_message(alert)
+            logger.info(f"Mantle alert sent: {len(mantle_mentions)} mentions")
+        else:
+            logger.info("No Mantle mentions today")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram_message(f"⚠️ Bot error: {e}")
