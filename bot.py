@@ -23,31 +23,27 @@ RUN_ON_START       = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
 # ── COMPETITORS ───────────────────────────────────────────────────────────────
 COMPETITORS = {
-    "plumenetwork":  "Plume",
-    "arbitrum":      "Arbitrum",
-    "Optimism":      "Optimism",
-    "Plasma":        "Plasma",
-    "BNBCHAIN":      "BNB Chain",
-    "StellarOrg":    "Stellar",
-    "avax":          "Avalanche",
-    "CantonNetwork": "Canton Network",
-    "solana":        "Solana",
-    "OndoFinance":   "Ondo Finance",
-    "RobinhoodCrypto": "Robinhood Crypto",
+    "plumenetwork": "Plume",
+    "arbitrum":     "Arbitrum",
+    "Optimism":     "Optimism",
+    "Plasma":       "Plasma",
+    "BNBCHAIN":     "BNB Chain",
+    "StellarOrg":   "Stellar",
+    "avax":         "Avalanche",
+    "CantonNetwork":"Canton Network",
+    "solana":       "Solana",
+    "OndoFinance":  "Ondo Finance",
 }
 
 # ── RESEARCH ACCOUNTS ─────────────────────────────────────────────────────────
 RESEARCH_ACCOUNTS = {
-    "galaxyhq":        "Galaxy",
-    "glxyresearch":    "Galaxy Research",
-    "MessariCrypto":   "Messari",
-    "a16zcrypto":      "a16z Crypto",
-    "coinbase":        "Coinbase",
-    "BinanceResearch": "Binance Research",
-    "chainalysis":     "Chainalysis",
-    "WuBlockchain":    "Wu Blockchain",
-    "OnchainDataNerd": "Onchain Data Nerd",
-    "glassnode":       "Glassnode",
+    "galaxyhq":       "Galaxy",
+    "glxyresearch":   "Galaxy Research",
+    "MessariCrypto":  "Messari",
+    "a16zcrypto":     "a16z Crypto",
+    "coinbase":       "Coinbase",
+    "BinanceResearch":"Binance Research",
+    "chainalysis":    "Chainalysis",
 }
 
 # ── NEWS RSS FEEDS ────────────────────────────────────────────────────────────
@@ -61,30 +57,6 @@ NEWS_FEEDS = [
 ]
 
 NARRATIVES = "RWA, Infrastructure, DeFi, Institutional, Regulation, Gaming/NFT, AI, Cross-chain, Stablecoins, Tokenization"
-
-# ── MANTLE KEYWORDS ───────────────────────────────────────────────────────────
-MANTLE_KEYWORDS = [
-    "mantle", "$mnt", "mantle network", "mantle l2",
-    "mantle rwa", "mnt token", "mantle tvl",
-]
-
-def detect_mantle_mentions(articles: list[dict]) -> list[dict]:
-    mentions = []
-    for a in articles:
-        text = (a.get("title", "") + " " + a.get("summary", "")).lower()
-        if any(kw in text for kw in MANTLE_KEYWORDS):
-            mentions.append(a)
-    return mentions
-
-def format_mantle_alert(mentions: list[dict]) -> str | None:
-    if not mentions:
-        return None
-    vn_time  = datetime.now(timezone(timedelta(hours=7)))
-    date_str = vn_time.strftime("%d/%m/%Y")
-    lines = [f"🚨 *MANTLE MENTION ALERT* — {date_str}\n{'─' * 28}\n"]
-    for i, a in enumerate(mentions, 1):
-        lines.append(f"{i}. {a['title']}\n{a['link']}")
-    return "\n\n".join(lines)
 
 # ── X API ─────────────────────────────────────────────────────────────────────
 X_HEADERS = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
@@ -173,9 +145,8 @@ def fetch_feed(url: str, max_items: int = 8, days: int = 1) -> list[dict]:
             if published and published < cutoff:
                 continue
             items.append({
-                "title":   getattr(entry, "title", "").strip(),
-                "link":    getattr(entry, "link", "").strip(),
-                "summary": getattr(entry, "summary", "")[:300].strip(),
+                "title": getattr(entry, "title", "").strip(),
+                "link":  getattr(entry, "link", "").strip(),
             })
         return items
     except Exception as e:
@@ -247,82 +218,30 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
     )
     return msg.content[0].text.strip()
 
-# ── CONTENT SCORING ───────────────────────────────────────────────────────────
-REPORT_KEYWORDS = [
-    "report", "research", "data", "analysis", "insights", "study",
-    "survey", "h1", "h2", "q1", "q2", "q3", "q4", "quarterly", "annual",
-    "state of", "findings", "outlook", "forecast", "trends"
-]
-NARRATIVE_KEYWORDS = [
-    "rwa", "tokenization", "tokenized", "defi", "infrastructure",
-    "ai", "stablecoin", "institutional", "regulation", "partnership",
-    "launch", "protocol", "mainnet", "upgrade"
-]
-SKIP_KEYWORDS = [
-    "price", "pump", "dump", "ath", "crash", "liquidat",
-    "treasury bought", "purchased", "buys btc", "buys eth",
-    "giveaway", "airdrop", "contest", "win ", "follow us",
-    "something big", "stay tuned", "coming soon", "can't wait",
-    "we are so early", "shhh", "👀", "🫡", "🤫"
-]
-
-def content_score(text: str) -> float:
-    t = text.lower()
-    # Skip engagement bait and price/noise
-    if any(kw in t for kw in SKIP_KEYWORDS):
-        return -5
-    # Skip very short vague tweets (likely teaser/bait)
-    if len(t.strip()) < 30:
-        return -5
-    score = 0
-    if any(kw in t for kw in REPORT_KEYWORDS):
-        score += 3
-    if any(kw in t for kw in NARRATIVE_KEYWORDS):
-        score += 2
-    return score
-
-def rank_tweets(tweets: list[dict], top_n: int = 15) -> list[dict]:
-    max_imp = max((t.get("impressions", 0) for t in tweets), default=1) or 1
-    scored = []
-    for t in tweets:
-        c_score = content_score(t.get("text", ""))
-        if c_score < 0:
-            continue
-        imp_score = (t.get("impressions", 0) / max_imp) * 10
-        final = imp_score * 0.4 + c_score * 0.6
-        scored.append({**t, "_score": final})
-    scored.sort(key=lambda x: x["_score"], reverse=True)
-    return scored[:top_n]
-
 # ── SECTION 1: OUTSTANDING INDUSTRY POSTS ────────────────────────────────────
 def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
-    ranked = rank_tweets(all_tweets, top_n=15)
+    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:30]
     lines = "\n".join(
-        f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | score={t['_score']:.1f} | {t['link']}"
-        for i, t in enumerate(ranked)
+        f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
+        for i, t in enumerate(sorted_tweets)
     )
-    return f"""From these pre-ranked tweets (last 24h, already filtered for quality), pick the TOP 3 most impactful posts for the crypto industry.
+    return f"""From these tweets (last 24h), pick the TOP 3 that best reflect broader crypto market narratives and trends.
 
-These 3 posts should reflect real market-wide narratives and developments — not engagement bait or hype.
+Each selected post must:
+- Reflect something meaningful about the WIDER MARKET — not just that chain's internal news
+- Contain data, stats, or insights that reveal a market trend, narrative, or ecosystem signal
+- Be relevant to someone tracking the crypto industry overall
 
-PRIORITY:
-1. Reports, research, market data, trend analysis
-2. RWA, AI, Infrastructure, Institutional, Tokenization narratives
-3. Major protocol launches or partnerships with wide industry impact
+ACCEPT: market statistics, onchain data revealing trends, research findings, narrative-defining milestones, ecosystem signals with broad market implication
+REJECT: self-promotional posts ("we're the best", "our ecosystem is growing"), internal product updates with no market implication, vague teasers, engagement bait ("something big coming"), price talk, token purchases, treasury moves, conference recaps
 
-STRICTLY SKIP:
-- Vague teasers ("something big coming", "stay tuned", "shhh")
-- Engagement bait (polls, giveaways, "follow us", generic hype)
-- Price movements, token purchases, corporate treasury moves
-- Conference recaps, memes, emoji-only posts
-
-No limit per chain — pick the 3 most impactful overall.
+No chain limit — pick the 3 most market-relevant posts overall.
 
 Tweets:
 {lines}
 
 Output EXACTLY 3 lines ranked 1 to 3:
-RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
+RANK | PROJECT | NARRATIVE | One sentence summary reflecting market insight (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
 Output lines only."""
@@ -362,21 +281,26 @@ def format_outstanding_block(items: list[dict]) -> str:
 # ── SECTION 2: MEDIA COVERAGE ─────────────────────────────────────────────────
 def build_media_coverage_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{i}: {a['title']} | {a.get('outlet', 'Media')} | {a['link']}" for i, a in enumerate(articles))
-    return f"""You are a crypto market analyst curating a research-focused media briefing.
+    return f"""You are curating a macro-level crypto briefing for C-level executives.
 
-PRIORITY — pick in this order:
-1. Research reports, data studies, market analyses, industry outlooks, H1/H2/quarterly reports
-2. Data-driven insights about narratives: RWA, tokenization, institutional adoption, DeFi, AI, stablecoins
-3. Regulatory or policy developments with broad industry impact
+SELECT only stories that:
+- Are macro in nature — affect the whole market or industry, not a single country, chain, or project
+- Show institutional moves: banks, funds, governments, regulators taking action on crypto/blockchain
+- Reveal how major narratives (RWA, tokenization, DeFi, stablecoins, AI+crypto) are evolving
+- Provide strategic intelligence useful for executive decision making
 
-SKIP: corporate treasury moves, token purchases, price-driven news, conference recaps, event promos, anything without data or analytical substance.
+REJECT:
+- Country-specific news (e.g. "Brazil bans X", "Japan approves Y") unless it has global industry implications
+- Project-specific updates (e.g. "Chain X launches feature Y")
+- Corporate treasury moves (companies buying/selling BTC/ETH)
+- Price-driven news, conference recaps, event promos
 
 If fewer than 3 qualify, output only those that do. Quality over quantity. Max 5.
 
 {lines}
 
 Output ranked lines:
-RANK | OUTLET NAME | NARRATIVE | One sentence summary (max 12 words) | link
+RANK | OUTLET | NARRATIVE | One sentence summary (max 12 words) | link
 
 Narratives: {NARRATIVES}
 Output lines only, no extra text."""
@@ -436,21 +360,21 @@ def build_research_prompt(tweets: list[dict], sent_links: set[str]) -> str:
         f"{i}: [{t['source']}] {t['text'][:200]} | {t['link']}"
         for i, t in enumerate(fresh)
     )
-    return f"""You are curating a weekly research briefing for C-level executives and institutional decision makers in crypto/blockchain.
+    return f"""You are curating a research briefing for C-level executives in crypto/blockchain.
 
-From these tweets by research firms (Galaxy, Messari, a16z, Coinbase, Binance Research, Chainalysis), pick the TOP 3 that share or reference STRATEGIC RESEARCH REPORTS — macro-level insights relevant to business or investment decisions.
+From these tweets by research firms, pick the TOP 3 that best capture:
+- Hot market narratives and where they're heading (micro and macro)
+- Historical or structural forces shaping the industry
+- Macro trends: institutional adoption, capital flows, regulatory shifts, technology convergence
+- Deep market insights: onchain data trends, liquidity dynamics, ecosystem growth signals
 
-ONLY accept tweets that:
-- Share a research report, analysis, or data study
-- Discuss macro market structure, institutional adoption, tokenization trends
-- Reference state-of-industry data or regulatory outlook
-- Contain a link to a full report or research piece
+ACCEPT: research reports, data studies, market analyses, trend forecasts, state-of-industry pieces, onchain insights with strategic implications
 
-STRICTLY REJECT:
-- Price commentary or market moves
-- Event announcements or conference promos
-- Generic opinion without data
-- Teaser tweets without substance
+REJECT:
+- Country-specific regulatory news without global implication
+- Price commentary or token moves
+- Conference announcements or event promos
+- Generic opinion without data backing
 
 Relevant narratives: {NARRATIVES}
 
@@ -489,7 +413,7 @@ def format_research_block(items: list[dict]) -> str:
     return "\n".join(lines) if lines else "No notable research this week."
 
 # ── BUILD DIGEST ──────────────────────────────────────────────────────────────
-def build_digest() -> tuple[list[str], dict, list[dict]]:
+def build_digest() -> tuple[list[str], dict]:
     logger.info("Fetching competitor tweets…")
     competitor_tweets = fetch_all_competitor_tweets()
 
@@ -535,7 +459,7 @@ def build_digest() -> tuple[list[str], dict, list[dict]]:
         "research":    research_items,
     }
 
-    return messages, sections, news_articles
+    return messages, sections
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
 def send_telegram_message(text: str) -> bool:
@@ -657,20 +581,11 @@ def send_lark(card: dict) -> bool:
 def run_job():
     logger.info("Running digest…")
     try:
-        messages, sections, news_articles = build_digest()
+        messages, sections = build_digest()
         send_telegram_messages(messages)
-        # lark_card = build_lark_card(sections)
-        # send_lark(lark_card)
-        logger.info("Digest sent to Telegram")
-
-        # ── MANTLE ALERT ──
-        mantle_mentions = detect_mantle_mentions(news_articles)
-        alert = format_mantle_alert(mantle_mentions)
-        if alert:
-            send_telegram_message(alert)
-            logger.info(f"Mantle alert sent: {len(mantle_mentions)} mentions")
-        else:
-            logger.info("No Mantle mentions today")
+        lark_card = build_lark_card(sections)
+        send_lark(lark_card)
+        logger.info("Digest sent to Telegram and Lark")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram_message(f"⚠️ Bot error: {e}")
