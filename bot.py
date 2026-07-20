@@ -23,27 +23,31 @@ RUN_ON_START       = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
 # ── COMPETITORS ───────────────────────────────────────────────────────────────
 COMPETITORS = {
-    "plumenetwork": "Plume",
-    "arbitrum":     "Arbitrum",
-    "Optimism":     "Optimism",
-    "Plasma":       "Plasma",
-    "BNBCHAIN":     "BNB Chain",
-    "StellarOrg":   "Stellar",
-    "avax":         "Avalanche",
-    "CantonNetwork":"Canton Network",
-    "solana":       "Solana",
-    "OndoFinance":  "Ondo Finance",
+    "plumenetwork":  "Plume",
+    "arbitrum":      "Arbitrum",
+    "Optimism":      "Optimism",
+    "Plasma":        "Plasma",
+    "BNBCHAIN":      "BNB Chain",
+    "StellarOrg":    "Stellar",
+    "avax":          "Avalanche",
+    "CantonNetwork": "Canton Network",
+    "solana":        "Solana",
+    "OndoFinance":   "Ondo Finance",
+    "RobinhoodCrypto": "Robinhood Crypto",
 }
 
 # ── RESEARCH ACCOUNTS ─────────────────────────────────────────────────────────
 RESEARCH_ACCOUNTS = {
-    "galaxyhq":       "Galaxy",
-    "glxyresearch":   "Galaxy Research",
-    "MessariCrypto":  "Messari",
-    "a16zcrypto":     "a16z Crypto",
-    "coinbase":       "Coinbase",
-    "BinanceResearch":"Binance Research",
-    "chainalysis":    "Chainalysis",
+    "galaxyhq":        "Galaxy",
+    "glxyresearch":    "Galaxy Research",
+    "MessariCrypto":   "Messari",
+    "a16zcrypto":      "a16z Crypto",
+    "coinbase":        "Coinbase",
+    "BinanceResearch": "Binance Research",
+    "chainalysis":     "Chainalysis",
+    "WuBlockchain":    "Wu Blockchain",
+    "OnchainDataNerd": "Onchain Data Nerd",
+    "glassnode":       "Glassnode",
 }
 
 # ── NEWS RSS FEEDS ────────────────────────────────────────────────────────────
