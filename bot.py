@@ -230,13 +230,20 @@ NARRATIVE_KEYWORDS = [
     "launch", "protocol", "mainnet", "upgrade"
 ]
 SKIP_KEYWORDS = [
-    "price", "pump", "dump", "ath", "crash", "liquidat", "treasury bought",
-    "purchased", "buys btc", "buys eth", "meme", "airdrop"
+    "price", "pump", "dump", "ath", "crash", "liquidat",
+    "treasury bought", "purchased", "buys btc", "buys eth",
+    "giveaway", "airdrop", "contest", "win ", "follow us",
+    "something big", "stay tuned", "coming soon", "can't wait",
+    "we are so early", "shhh", "👀", "🫡", "🤫"
 ]
 
 def content_score(text: str) -> float:
     t = text.lower()
+    # Skip engagement bait and price/noise
     if any(kw in t for kw in SKIP_KEYWORDS):
+        return -5
+    # Skip very short vague tweets (likely teaser/bait)
+    if len(t.strip()) < 30:
         return -5
     score = 0
     if any(kw in t for kw in REPORT_KEYWORDS):
@@ -246,14 +253,13 @@ def content_score(text: str) -> float:
     return score
 
 def rank_tweets(tweets: list[dict], top_n: int = 15) -> list[dict]:
-    """Score and rank tweets by content quality + impressions."""
     max_imp = max((t.get("impressions", 0) for t in tweets), default=1) or 1
     scored = []
     for t in tweets:
-        imp_score = (t.get("impressions", 0) / max_imp) * 10
-        c_score   = content_score(t.get("text", ""))
+        c_score = content_score(t.get("text", ""))
         if c_score < 0:
-            continue  # skip price/noise tweets
+            continue
+        imp_score = (t.get("impressions", 0) / max_imp) * 10
         final = imp_score * 0.4 + c_score * 0.6
         scored.append({**t, "_score": final})
     scored.sort(key=lambda x: x["_score"], reverse=True)
@@ -268,14 +274,20 @@ def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
     )
     return f"""From these pre-ranked tweets (last 24h, already filtered for quality), pick the TOP 3 most impactful posts for the crypto industry.
 
-These 3 posts should collectively represent the most significant market-moving narratives of the day. No limit per chain — if one chain has the 2 most impactful posts, include both.
+These 3 posts should reflect real market-wide narratives and developments — not engagement bait or hype.
 
 PRIORITY:
 1. Reports, research, market data, trend analysis
 2. RWA, AI, Infrastructure, Institutional, Tokenization narratives
 3. Major protocol launches or partnerships with wide industry impact
 
-SKIP anything about: price movements, token purchases, corporate treasury moves, conference recaps, memes.
+STRICTLY SKIP:
+- Vague teasers ("something big coming", "stay tuned", "shhh")
+- Engagement bait (polls, giveaways, "follow us", generic hype)
+- Price movements, token purchases, corporate treasury moves
+- Conference recaps, memes, emoji-only posts
+
+No limit per chain — pick the 3 most impactful overall.
 
 Tweets:
 {lines}
@@ -321,23 +333,21 @@ def format_outstanding_block(items: list[dict]) -> str:
 # ── SECTION 2: MEDIA COVERAGE ─────────────────────────────────────────────────
 def build_media_coverage_prompt(articles: list[dict]) -> str:
     lines = "\n".join(f"{i}: {a['title']} | {a.get('outlet', 'Media')} | {a['link']}" for i, a in enumerate(articles))
-    return f"""You are a crypto market analyst identifying impactful narratives being covered by media today.
+    return f"""You are a crypto market analyst curating a research-focused media briefing.
 
-Goal: Show which narratives and market trends are being pushed by media — reveal WHAT THE MARKET IS TALKING ABOUT.
+PRIORITY — pick in this order:
+1. Research reports, data studies, market analyses, industry outlooks, H1/H2/quarterly reports
+2. Data-driven insights about narratives: RWA, tokenization, institutional adoption, DeFi, AI, stablecoins
+3. Regulatory or policy developments with broad industry impact
 
-SELECT stories that:
-- Signal a major narrative gaining momentum (RWA, tokenization, institutional adoption, regulation, DeFi, stablecoins)
-- Have potential to move market sentiment or industry direction
-- Represent mainstream or crypto-native media paying attention to a broader trend
+SKIP: corporate treasury moves, token purchases, price-driven news, conference recaps, event promos, anything without data or analytical substance.
 
-DO NOT include: corporate treasury moves (companies buying/selling BTC/ETH/any token), token purchase announcements, price-driven news, conference recaps, event promos.
-
-If fewer than 3 stories qualify, output only those that do. Quality over quantity. Max 5.
+If fewer than 3 qualify, output only those that do. Quality over quantity. Max 5.
 
 {lines}
 
 Output ranked lines:
-RANK | OUTLET NAME | NARRATIVE | One sentence summary showing market impact (max 12 words) | link
+RANK | OUTLET NAME | NARRATIVE | One sentence summary (max 12 words) | link
 
 Narratives: {NARRATIVES}
 Output lines only, no extra text."""
