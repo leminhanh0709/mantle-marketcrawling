@@ -219,21 +219,69 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
     return msg.content[0].text.strip()
 
 # ── SECTION 1: OUTSTANDING INDUSTRY POSTS ────────────────────────────────────
+# ── CONTENT SCORING ───────────────────────────────────────────────────────────
+REPORT_KEYWORDS = [
+    "report", "research", "data", "analysis", "insights", "study",
+    "survey", "h1", "h2", "q1", "q2", "q3", "q4", "quarterly", "annual",
+    "state of", "findings", "outlook", "forecast", "trends", "statistics",
+    "metrics", "onchain", "on-chain", "tvl", "volume", "adoption"
+]
+NARRATIVE_KEYWORDS = [
+    "rwa", "tokenization", "tokenized", "defi", "infrastructure",
+    "ai", "stablecoin", "institutional", "regulation", "partnership",
+    "launch", "protocol", "mainnet", "upgrade", "ecosystem"
+]
+NOISE_KEYWORDS = [
+    "price", "pump", "dump", "ath", "crash", "liquidat",
+    "treasury bought", "purchased", "buys btc", "buys eth",
+    "giveaway", "airdrop", "contest", "follow us",
+    "something big", "stay tuned", "coming soon",
+    "we are so early", "shhh", "👀", "🤫"
+]
+
+def score_tweet(tweet: dict) -> float:
+    text = tweet.get("text", "").lower()
+    if any(kw in text for kw in NOISE_KEYWORDS):
+        return -1
+    if len(text.strip()) < 40:
+        return -1
+    content = 0
+    if any(kw in text for kw in REPORT_KEYWORDS):
+        content += 3
+    if any(kw in text for kw in NARRATIVE_KEYWORDS):
+        content += 2
+    return content
+
+def rank_tweets(tweets: list[dict], top_n: int = 15) -> list[dict]:
+    max_imp = max((t.get("impressions", 0) for t in tweets), default=1) or 1
+    scored = []
+    for t in tweets:
+        c = score_tweet(t)
+        if c < 0:
+            continue
+        imp_score = (t.get("impressions", 0) / max_imp) * 10
+        final = imp_score * 0.35 + c * 0.65
+        scored.append({**t, "_score": final})
+    scored.sort(key=lambda x: x["_score"], reverse=True)
+    return scored[:top_n]
+
 def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
-    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:30]
+    ranked = rank_tweets(all_tweets, top_n=15)
+    if not ranked:
+        return ""
     lines = "\n".join(
-        f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
-        for i, t in enumerate(sorted_tweets)
+        f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | score={t['_score']:.1f} | {t['link']}"
+        for i, t in enumerate(ranked)
     )
-    return f"""From these tweets (last 24h), pick the TOP 3 that best reflect broader crypto market narratives and trends.
+    return f"""From these pre-scored tweets (last 24h), pick the TOP 3 that best reflect broader crypto market narratives.
 
 Each selected post must:
 - Reflect something meaningful about the WIDER MARKET — not just that chain's internal news
-- Contain data, stats, or insights that reveal a market trend, narrative, or ecosystem signal
+- Contain data, stats, or insights revealing a market trend, narrative, or ecosystem signal
 - Be relevant to someone tracking the crypto industry overall
 
 ACCEPT: market statistics, onchain data revealing trends, research findings, narrative-defining milestones, ecosystem signals with broad market implication
-REJECT: self-promotional posts ("we're the best", "our ecosystem is growing"), internal product updates with no market implication, vague teasers, engagement bait ("something big coming"), price talk, token purchases, treasury moves, conference recaps
+REJECT: self-promotional posts, internal product updates with no market implication, vague teasers, engagement bait, price talk, token purchases, treasury moves, conference recaps
 
 No chain limit — pick the 3 most market-relevant posts overall.
 
@@ -424,7 +472,11 @@ def build_digest() -> tuple[list[str], dict]:
     news_articles = fetch_news()
 
     logger.info("Calling Claude (3 calls)…")
-    raw_outstanding = call_claude(build_outstanding_posts_prompt(competitor_tweets), max_tokens=800)
+    outstanding_prompt = build_outstanding_posts_prompt(competitor_tweets)
+    if outstanding_prompt:
+        raw_outstanding = call_claude(outstanding_prompt, max_tokens=800)
+    else:
+        raw_outstanding = ""
     raw_media       = call_claude(build_media_coverage_prompt(news_articles), max_tokens=600)
 
     sent_links      = get_sent_research_links()
@@ -583,8 +635,8 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        lark_card = build_lark_card(sections)
-        send_lark(lark_card)
+        # lark_card = build_lark_card(sections)
+        # send_lark(lark_card)
         logger.info("Digest sent to Telegram and Lark")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
