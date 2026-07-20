@@ -218,33 +218,69 @@ def call_claude(prompt: str, max_tokens: int = 600) -> str:
     )
     return msg.content[0].text.strip()
 
+# ── CONTENT SCORING ───────────────────────────────────────────────────────────
+REPORT_KEYWORDS = [
+    "report", "research", "data", "analysis", "insights", "study",
+    "survey", "h1", "h2", "q1", "q2", "q3", "q4", "quarterly", "annual",
+    "state of", "findings", "outlook", "forecast", "trends"
+]
+NARRATIVE_KEYWORDS = [
+    "rwa", "tokenization", "tokenized", "defi", "infrastructure",
+    "ai", "stablecoin", "institutional", "regulation", "partnership",
+    "launch", "protocol", "mainnet", "upgrade"
+]
+SKIP_KEYWORDS = [
+    "price", "pump", "dump", "ath", "crash", "liquidat", "treasury bought",
+    "purchased", "buys btc", "buys eth", "meme", "airdrop"
+]
+
+def content_score(text: str) -> float:
+    t = text.lower()
+    if any(kw in t for kw in SKIP_KEYWORDS):
+        return -5
+    score = 0
+    if any(kw in t for kw in REPORT_KEYWORDS):
+        score += 3
+    if any(kw in t for kw in NARRATIVE_KEYWORDS):
+        score += 2
+    return score
+
+def rank_tweets(tweets: list[dict], top_n: int = 15) -> list[dict]:
+    """Score and rank tweets by content quality + impressions."""
+    max_imp = max((t.get("impressions", 0) for t in tweets), default=1) or 1
+    scored = []
+    for t in tweets:
+        imp_score = (t.get("impressions", 0) / max_imp) * 10
+        c_score   = content_score(t.get("text", ""))
+        if c_score < 0:
+            continue  # skip price/noise tweets
+        final = imp_score * 0.4 + c_score * 0.6
+        scored.append({**t, "_score": final})
+    scored.sort(key=lambda x: x["_score"], reverse=True)
+    return scored[:top_n]
+
 # ── SECTION 1: OUTSTANDING INDUSTRY POSTS ────────────────────────────────────
 def build_outstanding_posts_prompt(all_tweets: list[dict]) -> str:
-    sorted_tweets = sorted(all_tweets, key=lambda t: t.get("impressions", 0), reverse=True)[:30]
+    ranked = rank_tweets(all_tweets, top_n=15)
     lines = "\n".join(
-        f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | {t['link']}"
-        for i, t in enumerate(sorted_tweets)
+        f"{i}: [{t['project']}] {t['text'][:150]} | impressions={t['impressions']} | score={t['_score']:.1f} | {t['link']}"
+        for i, t in enumerate(ranked)
     )
-    return f"""From these tweets (last 24h), select the best 1 post per chain/project.
+    return f"""From these pre-ranked tweets (last 24h, already filtered for quality), pick the TOP 3 most impactful posts for the crypto industry.
 
-SELECTION RULE per chain — pick in this order:
-1. Report/research/market analysis/trend commentary/data release (even if low views)
-2. Regulatory decision, institutional deal, protocol launch, partnership (high views preferred)
-3. Skip if only price news, treasury moves, token buying, conference recaps, memes available
+These 3 posts should collectively represent the most significant market-moving narratives of the day. No limit per chain — if one chain has the 2 most impactful posts, include both.
 
-HARD LIMIT: Exactly 1 post per chain. If a chain has multiple good posts, pick the single best one (prioritize report/research type).
+PRIORITY:
+1. Reports, research, market data, trend analysis
+2. RWA, AI, Infrastructure, Institutional, Tokenization narratives
+3. Major protocol launches or partnerships with wide industry impact
 
-STRICTLY SKIP for all chains:
-- Corporate treasury moves (companies buying/selling BTC/ETH/any token)
-- Token purchase announcements
-- Price-driven news or commentary
-- Conference recaps or event promos
-- Meaningless teasers or memes
+SKIP anything about: price movements, token purchases, corporate treasury moves, conference recaps, memes.
 
 Tweets:
 {lines}
 
-Output one line per chain (skip chain if nothing qualifies):
+Output EXACTLY 3 lines ranked 1 to 3:
 RANK | PROJECT | NARRATIVE | One sentence summary (max 12 words) | link | impressions_count
 
 Narratives: {NARRATIVES}
@@ -584,9 +620,9 @@ def run_job():
     try:
         messages, sections = build_digest()
         send_telegram_messages(messages)
-        lark_card = build_lark_card(sections)
-        send_lark(lark_card)
-        logger.info("Digest sent to Telegram and Lark")
+        # lark_card = build_lark_card(sections)
+        # send_lark(lark_card)
+        logger.info("Digest sent to Telegram")
     except Exception as e:
         logger.error(f"Job failed: {e}", exc_info=True)
         send_telegram_message(f"⚠️ Bot error: {e}")
